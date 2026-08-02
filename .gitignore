@@ -1,0 +1,15 @@
+# Secrets — never commit. Contains live Angel One PIN/TOTP secret and API keys.
+.env
+
+# Build artifacts (rebuild locally via start.bat / go build / pip install)
+*.exe
+*.db
+*.log
+
+# Python
+agent/venv/
+**/__pycache__/
+*.pyc
+
+# Claude Code session/tooling config — not part of the trading project itself
+.claude/

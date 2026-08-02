@@ -1,0 +1,798 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Trading Engine</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #131a22; --panel2: #0f151c; --border: #223041; --text: #e6edf3; --muted: #8b98a5;
+    --green: #3fb950; --red: #f85149; --amber: #d29922; --blue: #58a6ff; --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  a { color: var(--blue); }
+  .app { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+
+  /* Sidebar */
+  .sidebar { background: var(--panel2); border-right: 1px solid var(--border); padding: 16px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  .sidebar h1 { font-size: 15px; padding: 0 16px 16px; margin: 0; border-bottom: 1px solid var(--border); }
+  .navitem { display: flex; align-items: center; gap: 10px; padding: 10px 16px; color: var(--muted); cursor: pointer; font-size: 13px; border-left: 3px solid transparent; }
+  .navitem:hover { color: var(--text); background: #182029; }
+  .navitem.active { color: var(--text); border-left-color: var(--blue); background: #182029; }
+  .sidebar .section-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; padding: 16px 16px 6px; }
+  .sb-strat { display: flex; align-items: center; gap: 8px; padding: 7px 16px; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .sb-strat:hover { color: var(--text); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .dot.running { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.paused { background: var(--amber); }
+  .dot.stopped, .dot.not_started { background: var(--muted); }
+  .newstrat-btn { margin: 10px 16px 0; padding: 7px 10px; font-size: 12px; border-radius: 6px; border: 1px dashed var(--border); background: none; color: var(--muted); cursor: pointer; width: calc(100% - 32px); }
+  .newstrat-btn:hover { color: var(--text); border-color: var(--blue); }
+
+  /* Main */
+  .main { display: flex; flex-direction: column; min-height: 100vh; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg); z-index: 5; }
+  header h2 { font-size: 16px; margin: 0; font-weight: 600; }
+  .market { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+  .mdot { width: 8px; height: 8px; border-radius: 50%; }
+  .mdot.open { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .mdot.closed { background: var(--red); }
+  main.content { padding: 22px 24px; flex: 1; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+  .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); gap: 12px; margin-bottom: 18px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .stat .value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+
+  .strat-card { cursor: pointer; transition: border-color .15s; }
+  .strat-card:hover { border-color: var(--blue); }
+  .badges { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--border); color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .badge.running { color: var(--green); border-color: var(--green); }
+  .badge.paused { color: var(--amber); border-color: var(--amber); }
+  .pnl { font-size: 20px; font-weight: 700; }
+  .pnl.pos { color: var(--green); } .pnl.neg { color: var(--red); }
+  .stats-mini { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 14px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .stats-mini b { color: var(--text); font-weight: 600; }
+  .actions { display: flex; gap: 6px; margin-top: 12px; }
+  .actions button, button.btn { padding: 6px 10px; font-size: 11px; border-radius: 6px; border: 1px solid var(--border); background: #1c2530; color: var(--text); cursor: pointer; }
+  .actions button:hover, button.btn:hover { border-color: var(--blue); }
+  button.btn.primary { background: var(--blue); border-color: var(--blue); color: #041018; font-weight: 600; }
+  button.btn.primary:hover { filter: brightness(1.1); }
+  button.btn:disabled { opacity: .5; cursor: default; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: #182029; }
+  canvas.chart { width: 100%; height: 220px; background: #0d1319; border: 1px solid var(--border); border-radius: 8px; }
+  .section-title { font-size: 13px; color: var(--muted); margin: 20px 0 8px; text-transform: uppercase; letter-spacing: .04em; }
+  .log-line { font-size: 12px; font-family: ui-monospace, monospace; padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .log-line.error { color: var(--red); } .log-line.warn { color: var(--amber); }
+  .empty { color: var(--muted); text-align: center; padding: 50px 20px; }
+
+  /* Strategy Lab wizard */
+  .wizard-step { max-width: 640px; }
+  .wizard-step h3 { margin-bottom: 4px; }
+  .wizard-hint { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  .option-list { display: grid; gap: 8px; margin-bottom: 20px; }
+  .option { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; background: var(--panel); }
+  .option:hover { border-color: var(--blue); }
+  .option.selected { border-color: var(--blue); background: #142132; }
+  .option input { margin-top: 2px; }
+  .option .opt-title { font-weight: 600; font-size: 13px; }
+  .option .opt-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .wizard-nav { display: flex; gap: 10px; margin-top: 8px; }
+
+  .progress-list { display: grid; gap: 8px; max-width: 480px; }
+  .progress-item { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); opacity: 0; animation: pitem-in .35s ease forwards; }
+  .progress-item.done { color: var(--text); }
+  .progress-item.active { color: var(--blue); }
+  .progress-icon { width: 18px; text-align: center; }
+  .progress-item.done .progress-icon { animation: pitem-check .3s ease; }
+  .progress-item.active .progress-icon { display: inline-block; animation: pitem-pulse 1s ease-in-out infinite; }
+  @keyframes pitem-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes pitem-check { from { transform: scale(0.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  @keyframes pitem-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .progress-item, .progress-item.done .progress-icon, .progress-item.active .progress-icon { animation: none; opacity: 1; }
+  }
+
+  .tourn-row { display: grid; grid-template-columns: 1.4fr .6fr repeat(4, .7fr) .8fr; gap: 8px; align-items: center; padding: 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .tourn-row.header { color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: .04em; }
+  .tourn-row .name { font-weight: 600; font-size: 13px; }
+  .rec-badge { display: inline-block; background: var(--blue); color: #041018; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; margin-left: 8px; }
+  .expand-panel { grid-column: 1 / -1; background: var(--panel2); border-radius: 8px; padding: 12px 16px; margin: 4px 0 8px; font-size: 12px; color: var(--muted); }
+
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; width: min(900px, 94vw); max-height: 88vh; overflow-y: auto; padding: 20px; }
+  .close-btn { float: right; background: none; border: none; color: var(--muted); font-size: 20px; cursor: pointer; }
+  textarea.dsl-preview { width: 100%; height: 200px; background: #0d1319; color: var(--text); border: 1px solid var(--border); border-radius: 8px; font-family: ui-monospace, monospace; font-size: 11px; padding: 10px; }
+  .note { font-size: 12px; color: var(--muted); background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <nav class="sidebar">
+    <h1>AI Trading Engine</h1>
+    <div class="navitem active" data-page="dashboard">📊 Dashboard</div>
+    <div class="navitem" data-page="lab">🧠 Strategy Lab</div>
+    <div class="navitem" data-page="paper">📈 Paper Trading</div>
+    <div class="navitem" data-page="history">📜 Trade History</div>
+    <div class="navitem" data-page="analytics">📊 Analytics</div>
+    <div class="navitem" data-page="settings">⚙️ Settings</div>
+    <div class="section-label">Strategies</div>
+    <div id="sidebar-strategies"></div>
+    <button class="newstrat-btn" onclick="goTo('lab')">+ New Strategy</button>
+  </nav>
+
+  <div class="main">
+    <header>
+      <h2 id="page-title">Dashboard</h2>
+      <div class="market" id="market">checking market…</div>
+    </header>
+
+    <main class="content">
+
+      <!-- DASHBOARD -->
+      <div class="page active" id="page-dashboard">
+        <div class="stat-row" id="portfolio-summary"></div>
+        <div id="dash-grid" class="grid"></div>
+        <div id="dash-empty" class="empty" style="display:none">No strategies yet. Use <b>Strategy Lab</b> to build one, or click below to preview with example data.<br><br><button class="btn primary" onclick="seedDemo()">Load demo data</button></div>
+      </div>
+
+      <!-- STRATEGY LAB -->
+      <div class="page" id="page-lab">
+        <div id="lab-root"></div>
+      </div>
+
+      <!-- PAPER TRADING -->
+      <div class="page" id="page-paper">
+        <div id="paper-list" class="grid"></div>
+        <div id="paper-empty" class="empty" style="display:none">No strategies running yet.</div>
+        <div id="paper-detail"></div>
+      </div>
+
+      <!-- TRADE HISTORY -->
+      <div class="page" id="page-history">
+        <div style="margin-bottom:12px">
+          <label style="font-size:12px;color:var(--muted)">Strategy: </label>
+          <select id="history-select" onchange="renderHistory()" style="background:#1c2530;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px"></select>
+        </div>
+        <div class="card"><table><thead><tr><th>Symbol</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Entry Price</th><th>Exit Price</th><th>PnL</th><th>State</th><th>Reason</th></tr></thead><tbody id="history-body"></tbody></table></div>
+      </div>
+
+      <!-- ANALYTICS -->
+      <div class="page" id="page-analytics">
+        <div style="margin-bottom:12px">
+          <label style="font-size:12px;color:var(--muted)">Strategy: </label>
+          <select id="analytics-select" onchange="renderAnalytics()" style="background:#1c2530;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-size:12px"></select>
+        </div>
+        <div class="stat-row" id="analytics-stats"></div>
+        <canvas class="chart" id="analytics-chart" width="1000" height="260"></canvas>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="page" id="page-settings">
+        <div class="card" style="max-width:480px">
+          <div class="section-title" style="margin-top:0">Engine</div>
+          <div style="font-size:13px;color:var(--muted);line-height:1.8">
+            Starting capital per strategy: <b style="color:var(--text)" id="settings-capital">—</b><br>
+            Dashboard refresh interval: <b style="color:var(--text)">5s</b><br>
+            Backtest data source: <b style="color:var(--text)">Bundled 5y NIFTYBEES daily snapshot (Yahoo Finance via connectors/historical)</b>
+          </div>
+          <div class="section-title">API</div>
+          <div style="font-size:12px;color:var(--muted)">
+            All pages here call the engine's own HTTP API directly (same origin, no separate backend). See <code>docs/ENGINE_SPEC.md</code> and <code>docs/DSL_SPEC.md</code>.
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- Generic modal (trades/logs quick view) -->
+<div id="overlay" class="overlay" style="display:none">
+  <div class="modal">
+    <button class="close-btn" onclick="closeModal()">×</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<script>
+/* ---------- shared state & helpers ---------- */
+let strategiesCache = [];
+let currentPage = 'dashboard';
+const fmtMoney = v => '₹' + Number(v).toLocaleString('en-IN', {maximumFractionDigits: 2});
+const fmtPct = v => (v>=0?'+':'') + Number(v).toFixed(2) + '%';
+
+function goTo(page) {
+  currentPage = page;
+  document.querySelectorAll('.navitem').forEach(n => n.classList.toggle('active', n.dataset.page === page));
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
+  const titles = {dashboard:'Dashboard', lab:'Strategy Lab', paper:'Paper Trading', history:'Trade History', analytics:'Analytics', settings:'Settings'};
+  document.getElementById('page-title').textContent = titles[page];
+  if (page === 'lab') renderLab();
+  if (page === 'paper') renderPaper();
+  if (page === 'history') renderHistorySelect();
+  if (page === 'analytics') renderAnalyticsSelect();
+}
+document.querySelectorAll('.navitem').forEach(n => n.addEventListener('click', () => goTo(n.dataset.page)));
+
+function closeModal() { document.getElementById('overlay').style.display = 'none'; }
+function openModalHTML(html) {
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('overlay').style.display = 'flex';
+}
+
+async function api(method, path, body) {
+  const opts = {method};
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch(e) { data = text; }
+  if (!r.ok) { const err = new Error((data && data.error) || r.statusText); err.data = data; err.status = r.status; throw err; }
+  return data;
+}
+
+/* ---------- market status ---------- */
+async function refreshMarket() {
+  try {
+    const m = await api('GET', '/market/status');
+    document.getElementById('market').innerHTML =
+      '<span class="mdot ' + (m.open ? 'open' : 'closed') + '"></span>' +
+      (m.open ? 'Market OPEN' : 'Market CLOSED (' + m.reason + ')') + ' · ' + m.ist_time + ' IST';
+  } catch (e) {}
+}
+
+/* ---------- strategy list (drives sidebar + dashboard + paper trading) ---------- */
+async function refreshStrategies() {
+  try { strategiesCache = await api('GET', '/strategies') || []; } catch (e) { strategiesCache = []; }
+  renderSidebarStrategies();
+  if (currentPage === 'dashboard') renderDashboard();
+  if (currentPage === 'paper') renderPaper();
+}
+
+function renderSidebarStrategies() {
+  const el = document.getElementById('sidebar-strategies');
+  el.innerHTML = strategiesCache.map(s =>
+    '<div class="sb-strat" onclick="goTo(\'paper\');setTimeout(()=>openStrategyDetail(\'' + s.strategy_id + '\'),0)">' +
+    '<span class="dot ' + s.status + '"></span>' + s.strategy_name + '</div>'
+  ).join('') || '<div class="sb-strat" style="cursor:default">none yet</div>';
+}
+
+function portfolioSummary() {
+  const el = document.getElementById('portfolio-summary');
+  if (!strategiesCache.length) { el.innerHTML = ''; return; }
+  let totalPnl = 0, totalCapital = 0, running = 0;
+  strategiesCache.forEach(s => { totalPnl += parseFloat(s.pnl); totalCapital += parseFloat(s.starting_capital); if (s.status === 'running') running++; });
+  el.innerHTML =
+    '<div class="stat"><div class="label">Strategies</div><div class="value">' + strategiesCache.length + '</div></div>' +
+    '<div class="stat"><div class="label">Running</div><div class="value" style="color:var(--green)">' + running + '</div></div>' +
+    '<div class="stat"><div class="label">Total Capital Deployed</div><div class="value">' + fmtMoney(totalCapital) + '</div></div>' +
+    '<div class="stat"><div class="label">Total PnL</div><div class="value" style="color:' + (totalPnl>=0?'var(--green)':'var(--red)') + '">' + (totalPnl>=0?'+':'') + fmtMoney(totalPnl) + '</div></div>';
+}
+
+function strategyCard(s, opts) {
+  opts = opts || {};
+  const pnl = parseFloat(s.pnl);
+  const pnlPct = (pnl / parseFloat(s.starting_capital) * 100);
+  return '<div class="card strat-card" onclick="' + (opts.onclick || ("goTo('paper');setTimeout(()=>openStrategyDetail('" + s.strategy_id + "'),0)")) + '">' +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+      '<div><b>' + s.strategy_name + '</b><div style="font-size:11px;color:var(--muted)">' + s.symbols.join(', ') + ' · ' + s.timeframe + '</div></div>' +
+      '<button style="font-size:11px;color:var(--muted)" onclick="event.stopPropagation();removeStrategy(\'' + s.strategy_id + '\',\'' + s.strategy_name.replace(/'/g,"\\'") + '\')" title="Remove strategy">✕</button>' +
+    '</div>' +
+    '<div class="badges"><span class="badge ' + s.status + '">' + s.status.replace('_',' ') + '</span><span class="badge">' + s.type + '</span></div>' +
+    '<div class="pnl ' + (pnl>=0?'pos':'neg') + '">' + (pnl>=0?'+':'') + fmtMoney(pnl) + ' <span style="font-size:12px">(' + pnlPct.toFixed(2) + '%)</span></div>' +
+    '<div class="stats-mini">' +
+      '<div>Cash <b>' + fmtMoney(s.cash) + '</b></div>' +
+      '<div>Win rate <b>' + s.win_rate.toFixed(1) + '%</b></div>' +
+      '<div>Open positions <b>' + s.open_positions + '</b></div>' +
+      '<div>Completed <b>' + s.completed_trades + '</b></div>' +
+    '</div></div>';
+}
+
+function renderDashboard() {
+  portfolioSummary();
+  const grid = document.getElementById('dash-grid');
+  document.getElementById('dash-empty').style.display = strategiesCache.length ? 'none' : 'block';
+  grid.innerHTML = strategiesCache.map(s => strategyCard(s)).join('');
+}
+
+async function seedDemo() {
+  try { await api('POST', '/dev/seed'); await refreshStrategies(); } catch (e) { alert('seed failed: ' + e.message); }
+}
+
+/* ---------- PAPER TRADING page ---------- */
+function renderPaper() {
+  const list = document.getElementById('paper-list');
+  document.getElementById('paper-empty').style.display = strategiesCache.length ? 'none' : 'block';
+  list.innerHTML = strategiesCache.map(s => strategyCard(s, {onclick: "openStrategyDetail('" + s.strategy_id + "')"})).join('');
+}
+
+async function strategyAction(id, act) {
+  await api('POST', '/strategies/' + id + '/' + act);
+  await refreshStrategies();
+  openStrategyDetail(id);
+}
+
+function drawEquityChart(canvas, points) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  if (!points || points.length < 2) {
+    ctx.fillStyle = '#8b98a5'; ctx.font = '13px sans-serif';
+    ctx.fillText('Not enough closed trades yet for an equity curve.', 16, h/2);
+    return;
+  }
+  const values = points.map(p => p.equity);
+  const min = Math.min(...values), max = Math.max(...values), pad = 24;
+  const x = i => pad + (i / (points.length - 1)) * (w - pad*2);
+  const y = v => pad + (h - pad*2) - ((v - min) / ((max - min) || 1)) * (h - pad*2);
+  ctx.strokeStyle = '#223041'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(pad, y(points[0].equity)); ctx.lineTo(w-pad, y(points[0].equity)); ctx.stroke();
+  const last = values[values.length-1], first = values[0];
+  ctx.strokeStyle = last >= first ? '#3fb950' : '#f85149'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  points.forEach((p,i) => i===0 ? ctx.moveTo(x(i), y(p.equity)) : ctx.lineTo(x(i), y(p.equity)));
+  ctx.stroke();
+}
+
+async function openStrategyDetail(id) {
+  const s = strategiesCache.find(x => x.strategy_id === id);
+  if (!s) return;
+  const detail = document.getElementById('paper-detail');
+  detail.innerHTML = '<div class="card" style="margin-top:16px">Loading…</div>';
+
+  const [curve, trades, logs, live, predicted] = await Promise.all([
+    api('GET', '/strategies/' + id + '/equity-curve').catch(()=>[]),
+    api('GET', '/strategies/' + id + '/trades').catch(()=>[]),
+    api('GET', '/strategies/' + id + '/logs').catch(()=>[]),
+    api('GET', '/strategies/' + id + '/analytics').catch(()=>null),
+    api('GET', '/strategies/' + id + '/predicted-metrics').catch(()=>null),
+  ]);
+
+  const openTrade = (trades||[]).slice().reverse().find(t => t.State === 'ACTIVE' || t.State === 'OPEN');
+  const pnl = parseFloat(s.pnl);
+
+  detail.innerHTML =
+    '<div class="card" style="margin-top:16px">' +
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
+      '<div><h3 style="margin:0">' + s.strategy_name + '</h3>' +
+      '<div style="font-size:12px;color:var(--muted)">' + s.type + ' · ' + s.asset_type + ' · ' + s.symbols.join(', ') + ' · benchmark ' + s.benchmark + '</div></div>' +
+      '<div class="actions">' +
+        '<button onclick="strategyAction(\'' + id + '\',\'run\')">Run</button>' +
+        '<button onclick="strategyAction(\'' + id + '\',\'pause\')">Pause</button>' +
+        '<button onclick="strategyAction(\'' + id + '\',\'resume\')">Resume</button>' +
+        '<button onclick="strategyAction(\'' + id + '\',\'stop\')">Stop</button>' +
+        '<button style="color:var(--red);border-color:var(--red)" onclick="removeStrategy(\'' + id + '\',\'' + s.strategy_name.replace(/'/g,"\\'") + '\')">Remove</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="pnl ' + (pnl>=0?'pos':'neg') + '" style="margin-top:10px">' + (pnl>=0?'+':'') + fmtMoney(pnl) + '</div>' +
+    (openTrade ? (
+      '<div class="note">Current position: <b>' + openTrade.Symbol + '</b> — entered at ' + fmtMoney(openTrade.EntryPrice) +
+      ', qty ' + openTrade.Quantity + '</div>'
+    ) : '<div class="note">No open position right now.</div>') +
+    backtestVsLiveHTML(predicted, live) +
+    '<canvas class="chart" id="detail-chart" width="900" height="220"></canvas>' +
+    '<div class="section-title">Recent Trades</div>' +
+    '<table><thead><tr><th>Symbol</th><th>Entry</th><th>Exit</th><th>Qty</th><th>PnL</th><th>State</th><th>Reason</th></tr></thead><tbody>' +
+    (trades||[]).slice().reverse().slice(0,30).map(t =>
+      '<tr><td>' + t.Symbol + '</td><td>' + (t.EntryTime||'').replace('T',' ').slice(0,16) + '</td><td>' + (t.ExitTime||'').replace('T',' ').slice(0,16) + '</td>' +
+      '<td>' + t.Quantity + '</td><td style="color:' + (parseFloat(t.PnL)>=0?'#3fb950':'#f85149') + '">' + fmtMoney(t.PnL) + '</td><td>' + t.State + '</td><td>' + (t.CloseReason||'') + '</td></tr>'
+    ).join('') + '</tbody></table>' +
+    '<div class="section-title">Logs</div>' +
+    (logs||[]).map(l => '<div class="log-line ' + l.Level + '">[' + (l.CreatedAt||'').replace('T',' ').slice(0,19) + '] ' + l.Level.toUpperCase() + ' — ' + l.Message + '</div>').join('') +
+    ((logs||[]).length ? '' : '<div style="color:var(--muted);font-size:12px">No logs yet.</div>') +
+    '</div>';
+
+  drawEquityChart(document.getElementById('detail-chart'), curve);
+}
+
+function backtestVsLiveHTML(predicted, live) {
+  if (!predicted) {
+    return '<div class="note">No backtest prediction recorded for this strategy (only strategies deployed from Strategy Lab get one).</div>';
+  }
+  const rows = [
+    ['CAGR', predicted.CAGR, live && live.CAGR, '%'],
+    ['Sharpe', predicted.Sharpe, live && live.Sharpe, ''],
+    ['Max Drawdown', predicted.Drawdown, live && live.Drawdown, '%'],
+    ['Win Rate', predicted.WinRate, live && live.WinRate, '%'],
+    ['Profit Factor', predicted.ProfitFactor, live && live.ProfitFactor, ''],
+    ['Trades', predicted.TotalTrades, live && live.TotalTrades, ''],
+  ];
+  return '<div class="section-title">Backtest (predicted) vs Live (actual)</div>' +
+    '<div class="card">' +
+    '<div class="tourn-row header" style="grid-template-columns:1.4fr 1fr 1fr"><div>Metric</div><div>Backtest</div><div>Live so far</div></div>' +
+    rows.map(([label, pred, act, suffix]) =>
+      '<div class="tourn-row" style="grid-template-columns:1.4fr 1fr 1fr">' +
+      '<div class="name">' + label + '</div>' +
+      '<div>' + (typeof pred === 'number' ? pred.toFixed(2) : pred) + suffix + '</div>' +
+      '<div>' + (act != null ? (typeof act === 'number' ? act.toFixed(2) : act) + suffix : '—') + '</div>' +
+      '</div>'
+    ).join('') +
+    '</div>' +
+    '<div class="wizard-hint">Live numbers are still building up — early trade counts naturally diverge from a 5-year backtest average.</div>';
+}
+
+async function removeStrategy(id, name) {
+  if (!confirm('Remove "' + name + '" permanently? This deletes its trades, logs, and history — cannot be undone.')) return;
+  try {
+    await api('DELETE', '/strategies/' + id);
+    document.getElementById('paper-detail').innerHTML = '';
+    await refreshStrategies();
+  } catch (e) {
+    alert('Remove failed: ' + e.message);
+  }
+}
+
+/* ---------- TRADE HISTORY page ---------- */
+function renderHistorySelect() {
+  const sel = document.getElementById('history-select');
+  sel.innerHTML = strategiesCache.map(s => '<option value="' + s.strategy_id + '">' + s.strategy_name + '</option>').join('');
+  if (strategiesCache.length) renderHistory();
+  else document.getElementById('history-body').innerHTML = '<tr><td colspan="9" style="color:var(--muted)">No strategies yet.</td></tr>';
+}
+async function renderHistory() {
+  const id = document.getElementById('history-select').value;
+  if (!id) return;
+  const trades = await api('GET', '/strategies/' + id + '/trades').catch(()=>[]);
+  document.getElementById('history-body').innerHTML = (trades||[]).slice().reverse().map(t =>
+    '<tr><td>' + t.Symbol + '</td><td>' + (t.EntryTime||'').replace('T',' ').slice(0,16) + '</td><td>' + (t.ExitTime||'').replace('T',' ').slice(0,16) + '</td>' +
+    '<td>' + t.Quantity + '</td><td>' + fmtMoney(t.EntryPrice) + '</td><td>' + fmtMoney(t.ExitPrice) + '</td>' +
+    '<td style="color:' + (parseFloat(t.PnL)>=0?'#3fb950':'#f85149') + '">' + fmtMoney(t.PnL) + '</td><td>' + t.State + '</td><td>' + (t.CloseReason||'') + '</td></tr>'
+  ).join('') || '<tr><td colspan="9" style="color:var(--muted)">No trades yet.</td></tr>';
+}
+
+/* ---------- ANALYTICS page ---------- */
+function renderAnalyticsSelect() {
+  const sel = document.getElementById('analytics-select');
+  sel.innerHTML = strategiesCache.map(s => '<option value="' + s.strategy_id + '">' + s.strategy_name + '</option>').join('');
+  if (strategiesCache.length) renderAnalytics();
+}
+async function renderAnalytics() {
+  const id = document.getElementById('analytics-select').value;
+  if (!id) return;
+  const [m, curve] = await Promise.all([
+    api('GET', '/strategies/' + id + '/analytics').catch(()=>({})),
+    api('GET', '/strategies/' + id + '/equity-curve').catch(()=>[]),
+  ]);
+  const stats = document.getElementById('analytics-stats');
+  const rows = [
+    ['Win Rate', (m.WinRate||0).toFixed(1) + '%'], ['Profit Factor', (m.ProfitFactor||0).toFixed(2)],
+    ['CAGR', (m.CAGR||0).toFixed(2) + '%'], ['Total Return', (m.StrategyReturn||0).toFixed(2) + '%'],
+    ['Sharpe', (m.Sharpe||0).toFixed(2)], ['Sortino', (m.Sortino||0).toFixed(2)],
+    ['Max Drawdown', (m.Drawdown||0).toFixed(2) + '%'], ['Avg Hold (days)', (m.AverageHoldDays||0).toFixed(1)],
+    ['Total Trades', m.TotalTrades||0], ['Best Trade', fmtMoney(m.LargestWinner||0)], ['Worst Trade', fmtMoney(m.LargestLoser||0)],
+  ];
+  stats.innerHTML = rows.map(([l,v]) => '<div class="stat"><div class="label">' + l + '</div><div class="value" style="font-size:16px">' + v + '</div></div>').join('');
+  drawEquityChart(document.getElementById('analytics-chart'), curve);
+}
+
+/* ---------- STRATEGY LAB (AI agent) ---------- */
+const AGENT_BASE = 'http://localhost:8091';
+async function agentApi(method, path, body) {
+  const opts = {method};
+  if (body !== undefined) {
+    opts.body = JSON.stringify(body);
+    opts.headers = {'Content-Type': 'application/json'};
+  }
+  let r;
+  try { r = await fetch(AGENT_BASE + path, opts); }
+  catch (e) { const err = new Error('Agent not reachable at ' + AGENT_BASE + ' — is agent/api.py running?'); throw err; }
+  const text = await r.text();
+  let data; try { data = JSON.parse(text); } catch(e) { data = text; }
+  if (!r.ok) {
+    const msg = data && data.detail
+      ? (typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail))
+      : r.statusText;
+    const err = new Error(msg); err.data = data; err.status = r.status; throw err;
+  }
+  return data;
+}
+
+const lab = { style: null, loading: false, result: null, deployedId: null, error: null, progress: [], candidateProgress: [] };
+
+function labOption(group, value, title, desc) {
+  const selected = lab[group] === value;
+  return '<div class="option' + (selected?' selected':'') + '" onclick="labSelect(\'' + group + '\',\'' + value + '\')">' +
+    '<input type="radio" ' + (selected?'checked':'') + ' readonly>' +
+    '<div><div class="opt-title">' + title + '</div><div class="opt-desc">' + desc + '</div></div></div>';
+}
+function labSelect(group, value) { lab[group] = value; renderLab(); }
+
+function renderLab() {
+  const root = document.getElementById('lab-root');
+
+  if (lab.loading) {
+    const done = lab.progress || [];
+    const cands = lab.candidateProgress || [];
+    root.innerHTML = '<div class="wizard-step"><h3>Agent is building the strategy…</h3>' +
+      '<div class="wizard-hint">Real steps as they complete — this can take up to a minute (LLM + backtest calls).</div>' +
+      '<div class="progress-list">' +
+      done.map(label => '<div class="progress-item done"><span class="progress-icon">✓</span>' + label + '</div>').join('') +
+      '<div class="progress-item active"><span class="progress-icon">…</span>Working</div>' +
+      '</div>' +
+      (cands.length ? '<div class="section-title" style="margin-top:16px">Backtesting candidates (' + cands.filter(c=>c.status==='done').length + '/' + cands.length + ')</div>' +
+        '<div class="progress-list">' +
+        cands.map(c => '<div class="progress-item ' + (c.status==='done'?'done':'active') + '">' +
+          '<span class="progress-icon">' + (c.status==='done' ? '✓' : '…') + '</span>' +
+          c.name + (c.detail ? ' <span style="color:var(--muted);font-size:12px">— ' + c.detail + '</span>' : '') +
+          '</div>').join('') + '</div>' : '') +
+      '</div>';
+    return;
+  }
+
+  if (lab.result) {
+    renderLabResult(root);
+    return;
+  }
+
+  root.innerHTML =
+    '<div class="wizard-step"><h3>What would you like to build?</h3>' +
+    '<div class="wizard-hint">Scope: NIFTYBEES only. The agent picks the strategy itself — archetype, risk, holding period — grounded in live market/portfolio/memory context, then backtests and ranks the real candidates. Swing gets a full tournament against 5 years of real daily data; intraday backtests against real Yahoo intraday history, honestly scoped to whatever depth that timeframe actually has (e.g. ~60 real days for 5-minute candles — no free source gives years of intraday bars, so this is real data, not padded to look longer).</div>' +
+    '<div class="option-list">' +
+      labOption('style','swing','Swing Trading','Multi-day holds. Agent runs a full backtest tournament against 5 years of real daily data.') +
+      labOption('style','intraday','Intraday Trading','Same-day entry/exit. Backtested against real intraday history (~60 real days for 5-minute candles) before deploying to paper trading.') +
+    '</div>' +
+    (lab.error ? '<div class="note" style="color:var(--red)">' + lab.error + '</div>' : '') +
+    '<div class="wizard-nav"><button class="btn primary" ' + (lab.style?'':'disabled') + ' onclick="runLab()">Generate Strategy</button></div></div>';
+}
+
+async function runLab() {
+  lab.loading = true; lab.error = null; lab.result = null; lab.deployedId = null; lab.progress = []; lab.candidateProgress = [];
+  renderLab();
+  try {
+    const res = await fetch(AGENT_BASE + '/generate/stream', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({style: lab.style}),
+    });
+    if (!res.ok || !res.body) throw new Error('agent error: ' + res.status);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const events = buf.split('\n\n');
+      buf = events.pop(); // last chunk may be incomplete, keep for next read
+      for (const raw of events) {
+        const line = raw.trim();
+        if (!line.startsWith('data:')) continue;
+        const payload = JSON.parse(line.slice(5).trim());
+        if (payload.type === 'progress') {
+          if (payload.node === 'plan_node' && lab.progress.some(p => p.startsWith('Backtesting'))) {
+            // A retry round started (guardrails sent us back to planning)
+            // — the previous round's candidate list no longer applies.
+            lab.candidateProgress = [];
+          }
+          lab.progress.push(payload.label);
+          renderLab();
+        } else if (payload.type === 'backtest_candidate') {
+          const existing = lab.candidateProgress.find(c => c.name === payload.name);
+          if (existing) { existing.status = payload.status; existing.detail = payload.detail; }
+          else { lab.candidateProgress.push({name: payload.name, status: payload.status, detail: payload.detail}); }
+          renderLab();
+        } else if (payload.type === 'done') {
+          lab.result = payload.result;
+        } else if (payload.type === 'error') {
+          throw new Error(payload.message);
+        }
+      }
+    }
+    if (!lab.result) throw new Error('agent stream ended without a result');
+  } catch (e) {
+    lab.error = e.message;
+  }
+  lab.loading = false;
+  renderLab();
+}
+
+function evidenceChips(evidence) {
+  if (!evidence) return '';
+  const labels = {trend:'Trend', breadth:'Breadth', vix:'VIX', fii_dii:'FII/DII', news_sentiment:'News sentiment', research_conducted:'Research', lessons_consulted:'Past lessons'};
+  return Object.keys(labels).map(k => {
+    const v = evidence[k];
+    const on = k === 'lessons_consulted' ? v > 0 : !!v;
+    const text = k === 'lessons_consulted' && v > 0 ? labels[k] + ' (' + v + ')' : labels[k];
+    return '<span class="badge" style="' + (on ? 'color:var(--green);border-color:var(--green)' : 'opacity:.45') + '">' + text + '</span>';
+  }).join(' ');
+}
+
+function dataPointsHTML(dc) {
+  if (!dc || !Object.keys(dc).length) return '';
+  const m = dc.market || {};
+  const g = dc.global_market || {};
+  const reg = dc.regime || {};
+  const rows = [
+    ['Price', m.price ? '₹' + m.price : null],
+    ['Trend', m.trend],
+    ['RSI(14)', m.rsi14],
+    ['ADX(14)', m.adx14],
+    ['VIX', m.vix],
+    ['Breadth (A/D)', m.breadth],
+    ['FII Net', m.fii_net ? '₹' + m.fii_net + 'cr' : null],
+    ['DII Net', m.dii_net ? '₹' + m.dii_net + 'cr' : null],
+    ['News Sentiment', m.news_sentiment ? m.news_sentiment + ' (' + (m.news_score||0).toFixed(2) + ')' : null],
+    ['Overnight Cue', m.overnight],
+    ['Regime', reg.regime ? reg.regime + ' (' + Math.round((reg.confidence||0)*100) + '% confidence)' : null],
+    ['Global Risk Mode', g.risk_mode],
+    ['Global Bias', g.overall_bias],
+    ['Lessons Consulted', (dc.lessons||[]).length || null],
+  ].filter(([,v]) => v !== null && v !== undefined && v !== '');
+
+  if (!rows.length) return '';
+  return '<div class="section-title">Data points used</div><div class="card"><div class="stats-mini">' +
+    rows.map(([label, v]) => '<div>' + label + ': <b>' + v + '</b></div>').join('') +
+    '</div>' +
+    (reg.basis ? '<div class="wizard-hint" style="margin-top:8px">Regime basis: ' + reg.basis + '</div>' : '') +
+    (g.summary ? '<div class="wizard-hint">Global market: ' + g.summary + '</div>' : '') +
+    '</div>';
+}
+
+function robustnessHTML(sel) {
+  if (!sel || !sel.confidence) return '';
+  const bt = sel.backtest.metrics;
+  const mc = sel.monte_carlo || {};
+  const stab = sel.stability || {};
+  const conf = sel.confidence;
+  const maxPre = conf.max_pre_deployment_score || 75;
+  const confColor = conf.score >= maxPre * 0.75 ? 'var(--green)' : conf.score >= maxPre * 0.4 ? 'var(--amber)' : 'var(--red)';
+
+  const rows = [
+    ['Backtest gates', conf.breakdown.backtest_gates, 30],
+    ['Monte Carlo (not a lucky trade order)', conf.breakdown.monte_carlo, 15],
+    ['Parameter stability', conf.breakdown.parameter_stability, 15],
+    ['Memory track record', conf.breakdown.memory_track_record, 15],
+    ['Paper/live trading evidence', conf.breakdown.paper_live_evidence, 25],
+  ];
+
+  return '<div class="section-title" style="margin-top:20px">Robustness &amp; Confidence</div><div class="card">' +
+    '<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">' +
+      '<div style="font-size:28px;font-weight:700;color:' + confColor + '">' + conf.score + '/100</div>' +
+      '<div style="font-size:12px;color:var(--muted)">(max ' + maxPre + '/100 before this has ever traded live — see Paper/live evidence row)</div>' +
+    '</div>' +
+    '<div style="font-size:12px;color:var(--muted);margin-bottom:10px">' + conf.basis + '</div>' +
+    rows.map(([label, val, max]) => '<div style="font-size:12px;margin-bottom:4px">' + label + ': <b>' + val + '/' + max + '</b></div>').join('') +
+    '<div class="section-title" style="margin-top:14px">vs Buy &amp; Hold</div>' +
+    '<div style="font-size:13px">Strategy ' + (bt.StrategyReturn>=0?'+':'') + bt.StrategyReturn.toFixed(2) + '% vs NIFTYBEES buy-and-hold ' +
+      (bt.BenchmarkReturn>=0?'+':'') + bt.BenchmarkReturn.toFixed(2) + '% over the same period. ' +
+      '<span style="color:var(--muted)">A timing strategy trading only ' + bt.TotalTrades + ' times is normally behind an always-in-market benchmark on raw return — that alone isn\'t a red flag, risk-adjusted metrics (Sharpe, drawdown) matter more here.</span></div>' +
+    (mc.ran ? '<div class="section-title" style="margin-top:14px">Monte Carlo (trade-order shuffle, ' + 200 + ' runs)</div>' +
+      '<div style="font-size:13px">Real max drawdown ' + mc.real_max_drawdown_pct + '% vs median shuffled ' + mc.median_shuffled_drawdown_pct +
+      '% (worst-case ' + mc.worst_shuffled_drawdown_pct + '%). Real order sits at the ' + mc.real_order_percentile + 'th percentile. ' +
+      (mc.flag ? '<span style="color:var(--amber)">⚠ ' + mc.flag + '</span>' : '<span style="color:var(--green)">Typical, not a lucky sequence.</span>') + '</div>'
+      : '<div class="note" style="margin-top:14px">Monte Carlo: ' + (mc.reason || 'not run') + '</div>') +
+    (stab.ran ? '<div class="section-title" style="margin-top:14px">Parameter Stability (' + stab.indicator_perturbed + ')</div>' +
+      '<div style="font-size:13px">Sharpe across nearby parameters: ' + stab.perturbed_sharpes.join(', ') + ' (range ' + stab.min_sharpe + ' to ' + stab.max_sharpe + '). ' +
+      (stab.flag ? '<span style="color:var(--amber)">⚠ ' + stab.flag + '</span>' : '<span style="color:var(--green)">Holds up under small parameter changes.</span>') + '</div>'
+      : '<div class="note" style="margin-top:14px">Parameter stability: ' + (stab.reason || 'not run') + '</div>') +
+    '</div>';
+}
+
+function renderLabResult(root) {
+  const r = lab.result;
+  const sel = r.selected;
+  const bt = sel && sel.backtest ? sel.backtest.metrics : null;
+  const startingCapital = 100000;
+  // Derived from metrics.StrategyReturn, NOT backtest.final_cash — final_cash
+  // is just the cash ledger, which reads artificially low whenever a
+  // position is still open at the end of the backtest (cash spent buying
+  // it isn't "lost", it's tied up in a real position with real value, just
+  // not marked-to-market in this field). StrategyReturn already correctly
+  // reflects total realized return, so deriving ₹ from it keeps the ₹ and
+  // % figures from ever contradicting each other.
+  const finalCash = bt ? startingCapital * (1 + bt.StrategyReturn / 100) : null;
+
+  let rankedRows = '';
+  if (r.ranked && r.ranked.length > 0) {
+    rankedRows = '<div class="section-title" style="margin-top:20px">All candidates considered (' + r.ranked.length + ')</div>' +
+      '<div class="wizard-hint">Quality gates: trades ≥ 5, Sharpe &gt; 0, profit factor ≥ 1.0. A candidate failing any of these is rejected, never presented as a recommendation.</div>' +
+      '<div class="card">' +
+      '<div class="tourn-row header"><div>Strategy</div><div>CAGR</div><div>Sharpe</div><div>Max DD</div><div>Trades</div><div>Win Rate</div><div>Status</div></div>' +
+      r.ranked.map((c, i) => {
+        const m = c.backtest ? c.backtest.metrics : null;
+        const isSel = sel && c.dsl.strategy_id === sel.dsl.strategy_id;
+        const statusBadge = isSel
+          ? '<span class="rec-badge">Selected</span>'
+          : c.gate_passed
+            ? '<span class="badge" style="color:var(--green);border-color:var(--green)">Passed</span>'
+            : '<span class="badge" style="color:var(--red);border-color:var(--red)">Rejected</span>';
+        if (!m) {
+          return '<div class="tourn-row"><div class="name">' + c.name + '</div><div style="grid-column:2/7;color:var(--muted)">' + (c.valid ? 'no backtest' : 'failed validation') + '</div></div>';
+        }
+        return '<div class="tourn-row" onclick="toggleExpand(' + i + ')" style="cursor:pointer">' +
+          '<div class="name">' + c.name + '</div>' +
+          '<div>' + (m.CAGR||0).toFixed(1) + '%</div>' + '<div>' + (m.Sharpe||0).toFixed(2) + '</div>' +
+          '<div>' + (m.Drawdown||0).toFixed(1) + '%</div>' + '<div>' + (m.TotalTrades||0) + '</div>' +
+          '<div>' + (m.WinRate||0).toFixed(0) + '%</div>' + '<div>' + statusBadge + '</div>' +
+        '</div><div class="expand-panel" id="expand-' + i + '" style="display:none">' +
+          c.rationale +
+          (c.gate_reasons && c.gate_reasons.length ? '<br><span style="color:var(--red)">Rejected: ' + c.gate_reasons.join(', ') + '</span>' : '') +
+        '</div>';
+      }).join('') + '</div>';
+  }
+
+  const confScore = sel && sel.confidence ? sel.confidence.score : null;
+  const confMaxPre = sel && sel.confidence ? (sel.confidence.max_pre_deployment_score || 75) : 75;
+  const confDot = confScore == null ? '' : confScore >= confMaxPre*0.75 ? '🟢' : confScore >= confMaxPre*0.4 ? '🟡' : '🔴';
+  const deployBlock = !sel
+    ? ''
+    : lab.deployedId
+      ? '<div class="note">Deployed and running in paper trading as <b>' + lab.deployedId + '</b>. Check <a href="#" onclick="goTo(\'paper\');return false;">Paper Trading</a> to watch it live.</div>'
+      : '<div class="wizard-nav" style="flex-direction:column;align-items:flex-start;gap:8px">' +
+        (confScore != null ? '<div>' + confDot + ' Confidence: <b>' + confScore + '/100</b> (capped at ' + confMaxPre + '/100 — no paper/live trades yet, that\'s 25 of the 100 points and it\'s real zero right now, not a guess). ' +
+          (confScore >= confMaxPre*0.75 ? 'Reasonable to start paper trading and watch it accumulate real trades.' : 'Consider it a weaker candidate — still paper-trade only, watch closely before trusting it.') +
+        '</div>' : '') +
+        '<button class="btn primary" onclick="deploySelected()">Start Paper Trading</button></div>';
+
+  root.innerHTML =
+    '<div><h3>' + (sel ? sel.name : 'No deployable strategy found') + '</h3>' +
+    '<div class="wizard-hint">' + (r.llm_used ? 'Generated by the AI agent (' + (lab.style) + ').' : 'No LLM configured — deterministic fallback used (state.llm_used=false).') + '</div>' +
+    '<div class="card">' +
+      '<p style="margin-top:0">' + (r.description || '') + '</p>' +
+      '<div class="section-title">' + (sel ? 'Why this one' : 'Why nothing was recommended') + '</div>' +
+      '<p>' + (r.rationale || '') + '</p>' +
+      '<div class="section-title">Evidence consulted</div>' +
+      '<div class="badges">' + evidenceChips(r.evidence) + '</div>' +
+      (bt ? '<div class="pnl ' + (finalCash>=startingCapital?'pos':'neg') + '" style="margin-top:10px">' +
+          'On ' + fmtMoney(startingCapital) + ': ' + (finalCash>=startingCapital?'+':'') + fmtMoney(finalCash - startingCapital) +
+          ' <span style="font-size:13px">(' + (bt.StrategyReturn>=0?'+':'') + bt.StrategyReturn.toFixed(2) + '%) → ' + fmtMoney(finalCash) + '</span>' +
+        '</div>' +
+        '<div class="stats-mini" style="margin-top:10px">' +
+        '<div>CAGR: <b>' + bt.CAGR.toFixed(2) + '%</b></div><div>Sharpe: <b>' + bt.Sharpe.toFixed(2) + '</b></div>' +
+        '<div>Max Drawdown: <b>' + bt.Drawdown.toFixed(2) + '%</b></div><div>Trades: <b>' + bt.TotalTrades + '</b></div>' +
+        '<div>Win Rate: <b>' + bt.WinRate.toFixed(0) + '%</b></div><div>Profit Factor: <b>' + bt.ProfitFactor.toFixed(2) + '</b></div>' +
+      '</div>' : sel ? '<div class="note">No backtest available for this candidate.</div>' : '') +
+    '</div>' +
+    robustnessHTML(sel) +
+    dataPointsHTML(r.decision_context) +
+    (sel ? '<div class="section-title">Generated DSL</div><textarea class="dsl-preview" readonly>' + JSON.stringify(sel.dsl, null, 2) + '</textarea>' : '') +
+    rankedRows +
+    (r.errors && r.errors.length ? '<div class="note" style="color:var(--amber)">' + r.errors.join('; ') + '</div>' : '') +
+    (lab.error ? '<div class="note" style="color:var(--red)">' + lab.error + '</div>' : '') +
+    deployBlock +
+    '<div class="wizard-nav" style="margin-top:14px"><button class="btn" onclick="lab.result=null;lab.deployedId=null;renderLab()">Start Over</button></div></div>';
+}
+function toggleExpand(i) {
+  const el = document.getElementById('expand-' + i);
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function deploySelected() {
+  const sel = lab.result.selected;
+  if (!sel) return;
+  lab.error = null;
+  try {
+    const res = await agentApi('POST', '/deploy', {dsl: sel.dsl});
+    lab.deployedId = res.strategy_id;
+    if (sel.backtest && sel.backtest.metrics) {
+      const m = sel.backtest.metrics;
+      await api('POST', '/strategies/' + res.strategy_id + '/predicted-metrics', {
+        cagr: m.CAGR, sharpe: m.Sharpe, sortino: m.Sortino, drawdown: m.Drawdown,
+        win_rate: m.WinRate, profit_factor: m.ProfitFactor, total_trades: m.TotalTrades, source: 'agent',
+      }).catch(() => {}); // best-effort — deploy already succeeded, don't fail the flow over this
+    }
+    await refreshStrategies();
+  } catch (e) {
+    lab.error = 'Deploy failed: ' + e.message;
+  }
+  renderLab();
+}
+
+/* ---------- boot ---------- */
+refreshMarket(); refreshStrategies();
+setInterval(refreshMarket, 5000);
+setInterval(refreshStrategies, 5000);
+</script>
+</body>
+</html>
