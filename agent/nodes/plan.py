@@ -38,7 +38,12 @@ not merely name-drop the archetype:
    Monte Carlo check exist to catch downstream — plan accordingly, don't fight them).
 5. If nothing in the current regime clearly favors an archetype over the others, say that plainly in its
    rationale instead of inventing a story — an honest "this is a reasonable default, not a strong match" is
-   more useful than false confidence."""
+   more useful than false confidence.
+6. Lessons and the avoid-list are a record of what happened in past paper-trading samples under past market
+   conditions — they are not a guarantee of future performance. A high-confidence lesson can still stop working
+   if the regime shifts (this project has no walk-forward/regime-segmented validation yet — see BACKLOG.md), and
+   a low-observation lesson (just above 5) could still be noise. Never phrase a lesson-based choice as 'this is
+   proven to work' — phrase it as 'this is what the sample seen so far supports'."""
 
 
 def _avoid_archetypes(state: AgentState, archetype_list: list, style: str) -> list:

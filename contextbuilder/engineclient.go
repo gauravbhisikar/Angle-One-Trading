@@ -72,6 +72,21 @@ func (c *engineClient) trades(ctx context.Context, strategyID string) ([]engineT
 	return out, err
 }
 
+// engineLogEntry mirrors storage.LogEntry's JSON shape (engine/internal/
+// storage/repo_log.go) — same duplication reasoning as engineTrade.
+// ListByStrategy returns newest-first, so out[0] is the most recent entry.
+type engineLogEntry struct {
+	Level     string
+	Message   string
+	CreatedAt string
+}
+
+func (c *engineClient) logs(ctx context.Context, strategyID string) ([]engineLogEntry, error) {
+	var out []engineLogEntry
+	err := c.get(ctx, "/strategies/"+strategyID+"/logs", &out)
+	return out, err
+}
+
 // engineFeatureRow mirrors featurestore.FullRow's JSON shape
 // (engine/internal/featurestore/store.go) — same duplication reasoning.
 type engineFeatureRow struct {

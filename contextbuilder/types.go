@@ -168,16 +168,23 @@ type ReviewSummary struct {
 type PaperTradingContext struct {
 	// Populated for build_strategy: a quick "what's already running"
 	// cross-check. Populated for review_strategy/optimize_strategy: the
-	// specific strategy's own recent trades.
+	// specific strategy's own recent trades and logs (deeper than the
+	// few-line RunningStrategy.RecentLogs summary every strategy gets).
 	Running      []RunningStrategy `json:"running,omitempty"`
 	RecentTrades []TradeSummary    `json:"recent_trades,omitempty"`
+	RecentLogs   []string          `json:"recent_logs,omitempty"`
 }
 
 type RunningStrategy struct {
-	StrategyID string `json:"strategy_id"`
-	Name       string `json:"name"`
-	Status     string `json:"status"`
-	PnL        string `json:"pnl"`
+	StrategyID string   `json:"strategy_id"`
+	Name       string   `json:"name"`
+	Status     string   `json:"status"`
+	PnL        string   `json:"pnl"`
+	// RecentLogs is the last few real engine log lines for this strategy
+	// (auto-pause/resume, evaluation-cutoff reached, errors) — so the AI
+	// sees not just a status label but why it's in that state, per
+	// strategy, every time it plans/reviews. Newest first.
+	RecentLogs []string `json:"recent_logs,omitempty"`
 }
 
 type TradeSummary struct {

@@ -27,7 +27,12 @@ If NO candidate is selected (selected is null): every candidate failed quality g
 deployable strategy found for the requested objective under current conditions" and summarize, using the real
 gate_reasons on each ranked candidate, why they failed (e.g. negative Sharpe, profit factor below 1, too few
 trades) — do not soften this into a recommendation, and do not pick the "least bad" loser and present it as
-if it were fine."""
+if it were fine.
+
+If decision context lessons or the avoid-list influenced which archetype was even proposed, note in weaknesses
+that this project has no walk-forward/regime-segmented validation yet — a lesson built from past paper-trading
+samples describes what happened under past conditions, not a guarantee this candidate keeps working if the
+regime shifts. State that plainly rather than implying past success is proof of a durable edge."""
 
 
 def _evidence_checklist(state: AgentState) -> dict:
