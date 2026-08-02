@@ -225,8 +225,12 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = rt
-	if err := s.Strategies.SetFirstRunAt(id, time.Now().UTC()); err != nil {
+	now := time.Now().UTC()
+	if err := s.Strategies.SetFirstRunAt(id, now); err != nil {
 		s.Logs.Insert(id, "error", "failed to record first_run_at: "+err.Error())
+	}
+	if err := s.Strategies.SetLastRunAt(id, now); err != nil {
+		s.Logs.Insert(id, "error", "failed to record last_run_at: "+err.Error())
 	}
 	s.setStatus(id, "running")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "running"})

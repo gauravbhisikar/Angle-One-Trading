@@ -24,6 +24,7 @@ import (
 	"tradingengine/internal/marketdata"
 	"tradingengine/internal/marketsession"
 	"tradingengine/internal/models"
+	"tradingengine/internal/retention"
 	"tradingengine/internal/scheduler"
 	"tradingengine/internal/storage"
 )
@@ -122,6 +123,15 @@ func main() {
 	// completed trades. See internal/evalcutoff/monitor.go.
 	cutoffMonitor := evalcutoff.NewMonitor(eng, strategies, trades, logs, time.Duration(cfg.MarketSessionPollSeconds)*time.Second)
 	go cutoffMonitor.Run(ctx)
+
+	// Reclaims disk space from strategies idle (no /run) for 90+ days:
+	// deletes raw trades/orders/logs, keeps the strategy definition and
+	// all analysis (predicted_metrics/ai_reviews/memory) so it can be
+	// redeployed and re-run unchanged if ever needed again. See
+	// internal/retention/monitor.go. Polls once a day — this doesn't need
+	// the market-session cadence the other two monitors use.
+	retentionMonitor := retention.NewMonitor(eng, strategies, trades, orders, logs, 24*time.Hour)
+	go retentionMonitor.Run(ctx)
 
 	httpServer := &http.Server{Addr: cfg.APIAddr, Handler: server.Handler()}
 	go func() {

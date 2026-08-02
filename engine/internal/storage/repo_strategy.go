@@ -121,6 +121,64 @@ func (r *StrategyRepo) GetFirstRunAt(strategyID string) (time.Time, bool, error)
 	return t, true, nil
 }
 
+// SetLastRunAt records when a strategy was MOST RECENTLY started — unlike
+// SetFirstRunAt this overwrites on every /run call. internal/retention's
+// Monitor anchors its 90-day purge window to this (idle-since, not
+// started-since), so a strategy someone keeps re-running never gets
+// purged just because it's old.
+func (r *StrategyRepo) SetLastRunAt(strategyID string, t time.Time) error {
+	_, err := r.db.Exec(
+		`UPDATE strategies SET last_run_at = ? WHERE strategy_id = ?`,
+		t.UTC().Format(time.RFC3339), strategyID,
+	)
+	return err
+}
+
+func (r *StrategyRepo) GetLastRunAt(strategyID string) (time.Time, bool, error) {
+	var raw sql.NullString
+	err := r.db.QueryRow(`SELECT last_run_at FROM strategies WHERE strategy_id = ?`, strategyID).Scan(&raw)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return time.Time{}, false, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw.String)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
+}
+
+// SetPurgedAt marks that retention.Monitor already deleted this strategy's
+// trades/orders/logs — makes the purge idempotent (checked before
+// re-running the delete queries every poll) and lets the dashboard show
+// "data purged" instead of a bare zero-trades count that would otherwise
+// be indistinguishable from "never traded."
+func (r *StrategyRepo) SetPurgedAt(strategyID string, t time.Time) error {
+	_, err := r.db.Exec(
+		`UPDATE strategies SET purged_at = ? WHERE strategy_id = ?`,
+		t.UTC().Format(time.RFC3339), strategyID,
+	)
+	return err
+}
+
+func (r *StrategyRepo) GetPurgedAt(strategyID string) (time.Time, bool, error) {
+	var raw sql.NullString
+	err := r.db.QueryRow(`SELECT purged_at FROM strategies WHERE strategy_id = ?`, strategyID).Scan(&raw)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return time.Time{}, false, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw.String)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
+}
+
 func (r *StrategyRepo) ListStrategyIDs() ([]string, error) {
 	rows, err := r.db.Query(`SELECT strategy_id FROM strategies ORDER BY created_at`)
 	if err != nil {

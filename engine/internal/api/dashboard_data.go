@@ -36,6 +36,13 @@ type StrategySummary struct {
 	EvalProgress      int  `json:"eval_progress"`       // days running (intraday) or completed trades (swing)
 	EvalLimit         int  `json:"eval_limit"`          // IntradayMaxAge in days, or SwingMaxExitTrades
 	EvalCutoffReached bool `json:"eval_cutoff_reached"`
+
+	// DataPurged distinguishes "never traded" from "traded, but raw
+	// trades/orders/logs were reclaimed after 90 idle days" — see
+	// internal/retention. CompletedTrades/WinRate/ProfitFactor read as 0
+	// either way, which would otherwise look identical to a strategy that
+	// simply never ran.
+	DataPurged bool `json:"data_purged"`
 }
 
 // handleListStrategies is the dashboard's single overview call: every
@@ -90,6 +97,8 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			evalReached = evalProgress >= evalLimit
 		}
 
+		_, dataPurged, _ := s.Strategies.GetPurgedAt(id)
+
 		out = append(out, StrategySummary{
 			StrategyID: strat.StrategyID, StrategyName: strat.StrategyName, StrategyVersion: strat.StrategyVersion,
 			Type: string(strat.Type), AssetType: string(strat.AssetType), Symbols: strat.Symbols,
@@ -98,6 +107,7 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			StartingCapital: s.DefaultStartingCapital.String(), Cash: cash.String(), PnL: totalPnL.String(),
 			WinRate: m.WinRate, ProfitFactor: m.ProfitFactor, CompletedTrades: completed,
 			EvalProgress: evalProgress, EvalLimit: evalLimit, EvalCutoffReached: evalReached,
+			DataPurged: dataPurged,
 		})
 	}
 

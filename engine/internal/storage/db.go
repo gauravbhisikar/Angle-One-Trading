@@ -30,7 +30,9 @@ CREATE TABLE IF NOT EXISTS strategies (
 	strategy_id TEXT PRIMARY KEY,
 	name        TEXT NOT NULL,
 	created_at  TEXT NOT NULL,
-	first_run_at TEXT NOT NULL DEFAULT ''
+	first_run_at TEXT NOT NULL DEFAULT '',
+	last_run_at  TEXT NOT NULL DEFAULT '',
+	purged_at    TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS strategy_versions (
@@ -145,6 +147,8 @@ var predictedMetricsExtraColumns = []string{
 // pattern as predictedMetricsExtraColumns.
 var strategiesExtraColumns = []string{
 	`ALTER TABLE strategies ADD COLUMN first_run_at TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE strategies ADD COLUMN last_run_at TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE strategies ADD COLUMN purged_at TEXT NOT NULL DEFAULT ''`,
 }
 
 func migrate(db *sql.DB) error {
