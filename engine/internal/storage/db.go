@@ -32,7 +32,11 @@ CREATE TABLE IF NOT EXISTS strategies (
 	created_at  TEXT NOT NULL,
 	first_run_at TEXT NOT NULL DEFAULT '',
 	last_run_at  TEXT NOT NULL DEFAULT '',
-	purged_at    TEXT NOT NULL DEFAULT ''
+	purged_at    TEXT NOT NULL DEFAULT '',
+	final_pnl              TEXT NOT NULL DEFAULT '',
+	final_win_rate         REAL NOT NULL DEFAULT 0,
+	final_profit_factor    REAL NOT NULL DEFAULT 0,
+	final_completed_trades INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS strategy_versions (
@@ -149,6 +153,10 @@ var strategiesExtraColumns = []string{
 	`ALTER TABLE strategies ADD COLUMN first_run_at TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE strategies ADD COLUMN last_run_at TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE strategies ADD COLUMN purged_at TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE strategies ADD COLUMN final_pnl TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE strategies ADD COLUMN final_win_rate REAL NOT NULL DEFAULT 0`,
+	`ALTER TABLE strategies ADD COLUMN final_profit_factor REAL NOT NULL DEFAULT 0`,
+	`ALTER TABLE strategies ADD COLUMN final_completed_trades INTEGER NOT NULL DEFAULT 0`,
 }
 
 func migrate(db *sql.DB) error {

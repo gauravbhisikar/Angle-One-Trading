@@ -15,6 +15,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/shopspring/decimal"
+
+	"tradingengine/internal/analytics"
+	"tradingengine/internal/models"
 	"tradingengine/internal/scheduler"
 	"tradingengine/internal/storage"
 	"tradingengine/internal/strategy"
@@ -32,17 +36,18 @@ const PurgeAfterIdle = 90 * 24 * time.Hour
 const SystemLogStrategyID = "SYSTEM"
 
 type Monitor struct {
-	engine     *scheduler.Engine
-	strategies *storage.StrategyRepo
-	trades     *storage.TradeRepo
-	orders     *storage.OrderRepo
-	logs       *storage.LogRepo
-	interval   time.Duration
-	now        func() time.Time
+	engine          *scheduler.Engine
+	strategies      *storage.StrategyRepo
+	trades          *storage.TradeRepo
+	orders          *storage.OrderRepo
+	logs            *storage.LogRepo
+	startingCapital decimal.Decimal
+	interval        time.Duration
+	now             func() time.Time
 }
 
-func NewMonitor(engine *scheduler.Engine, strategies *storage.StrategyRepo, trades *storage.TradeRepo, orders *storage.OrderRepo, logs *storage.LogRepo, interval time.Duration) *Monitor {
-	return &Monitor{engine: engine, strategies: strategies, trades: trades, orders: orders, logs: logs, interval: interval, now: time.Now}
+func NewMonitor(engine *scheduler.Engine, strategies *storage.StrategyRepo, trades *storage.TradeRepo, orders *storage.OrderRepo, logs *storage.LogRepo, startingCapital decimal.Decimal, interval time.Duration) *Monitor {
+	return &Monitor{engine: engine, strategies: strategies, trades: trades, orders: orders, logs: logs, startingCapital: startingCapital, interval: interval, now: time.Now}
 }
 
 func (m *Monitor) Run(ctx context.Context) {
@@ -80,6 +85,33 @@ func (m *Monitor) checkAndAct() {
 	}
 }
 
+// snapshotPerformance records how the strategy actually did, right before
+// its raw trades are deleted. Best-effort: a failure here never blocks the
+// purge itself (space reclamation matters more than the snapshot), it
+// just means that strategy's card falls back to showing zeros post-purge.
+func (m *Monitor) snapshotPerformance(id string) {
+	strat, _, err := m.strategies.GetLatestVersion(id)
+	if err != nil {
+		return
+	}
+	trades, err := m.trades.ListByStrategy(id, strat.StrategyVersion)
+	if err != nil {
+		return
+	}
+	metrics := analytics.Compute(trades, m.startingCapital, 0)
+
+	pnl := decimal.Zero
+	for _, t := range trades {
+		if t.State == models.TradeClosed || t.State == models.TradeStopped || t.State == models.TradeTargetHit {
+			pnl = pnl.Add(t.PnL)
+		}
+	}
+
+	_ = m.strategies.SetFinalPerformance(id, storage.FinalPerformance{
+		PnL: pnl.String(), WinRate: metrics.WinRate, ProfitFactor: metrics.ProfitFactor, CompletedTrades: metrics.TotalTrades,
+	})
+}
+
 func (m *Monitor) purgeOne(id string) bool {
 	// Never touch a strategy the scheduler still has live in memory —
 	// running OR paused both mean it's actively being managed (paused
@@ -100,6 +132,8 @@ func (m *Monitor) purgeOne(id string) bool {
 	if m.now().Sub(lastRun) < PurgeAfterIdle {
 		return false
 	}
+
+	m.snapshotPerformance(id)
 
 	if err := m.trades.DeleteByStrategy(id); err != nil {
 		return false

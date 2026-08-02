@@ -130,7 +130,7 @@ func main() {
 	// redeployed and re-run unchanged if ever needed again. See
 	// internal/retention/monitor.go. Polls once a day — this doesn't need
 	// the market-session cadence the other two monitors use.
-	retentionMonitor := retention.NewMonitor(eng, strategies, trades, orders, logs, 24*time.Hour)
+	retentionMonitor := retention.NewMonitor(eng, strategies, trades, orders, logs, startingCapital, 24*time.Hour)
 	go retentionMonitor.Run(ctx)
 
 	httpServer := &http.Server{Addr: cfg.APIAddr, Handler: server.Handler()}

@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>AI Trading Engine</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
 <style>
   :root {
     --bg: #0b0f14; --panel: #131a22; --panel2: #0f151c; --border: #223041; --text: #e6edf3; --muted: #8b98a5;
@@ -339,7 +340,12 @@ function renderPaper() {
 }
 
 async function strategyAction(id, act) {
-  await api('POST', '/strategies/' + id + '/' + act);
+  try {
+    await api('POST', '/strategies/' + id + '/' + act);
+  } catch (e) {
+    alert(act.charAt(0).toUpperCase() + act.slice(1) + ' failed: ' + e.message);
+    return;
+  }
   await refreshStrategies();
   openStrategyDetail(id);
 }

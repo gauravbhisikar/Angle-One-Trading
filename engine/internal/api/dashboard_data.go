@@ -83,6 +83,19 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		winRate, profitFactor, pnl := m.WinRate, m.ProfitFactor, totalPnL.String()
+
+		// A purged strategy has no raw trades left to compute from — fall
+		// back to the snapshot retention.Monitor took right before deleting
+		// them, so the card still shows how it actually did instead of
+		// zeros indistinguishable from "never traded."
+		_, dataPurged, _ := s.Strategies.GetPurgedAt(id)
+		if dataPurged {
+			if final, ok, err := s.Strategies.GetFinalPerformance(id); err == nil && ok {
+				winRate, profitFactor, completed, pnl = final.WinRate, final.ProfitFactor, final.CompletedTrades, final.PnL
+			}
+		}
+
 		evalProgress, evalLimit, evalReached := 0, 0, false
 		switch strat.Type {
 		case models.StrategyIntraday:
@@ -97,15 +110,13 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			evalReached = evalProgress >= evalLimit
 		}
 
-		_, dataPurged, _ := s.Strategies.GetPurgedAt(id)
-
 		out = append(out, StrategySummary{
 			StrategyID: strat.StrategyID, StrategyName: strat.StrategyName, StrategyVersion: strat.StrategyVersion,
 			Type: string(strat.Type), AssetType: string(strat.AssetType), Symbols: strat.Symbols,
 			Timeframe: string(strat.Timeframe), Benchmark: strat.Benchmark,
 			Status: status, OpenPositions: openPositions,
-			StartingCapital: s.DefaultStartingCapital.String(), Cash: cash.String(), PnL: totalPnL.String(),
-			WinRate: m.WinRate, ProfitFactor: m.ProfitFactor, CompletedTrades: completed,
+			StartingCapital: s.DefaultStartingCapital.String(), Cash: cash.String(), PnL: pnl,
+			WinRate: winRate, ProfitFactor: profitFactor, CompletedTrades: completed,
 			EvalProgress: evalProgress, EvalLimit: evalLimit, EvalCutoffReached: evalReached,
 			DataPurged: dataPurged,
 		})

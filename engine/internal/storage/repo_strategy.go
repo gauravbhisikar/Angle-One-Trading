@@ -179,6 +179,45 @@ func (r *StrategyRepo) GetPurgedAt(strategyID string) (time.Time, bool, error) {
 	return t, true, nil
 }
 
+// FinalPerformance is a snapshot of a strategy's real trading results
+// taken right before retention.Monitor deletes its raw trades — so a
+// purged strategy's card still shows how it actually did instead of
+// zeros indistinguishable from "never traded."
+type FinalPerformance struct {
+	PnL             string
+	WinRate         float64
+	ProfitFactor    float64
+	CompletedTrades int
+}
+
+func (r *StrategyRepo) SetFinalPerformance(strategyID string, p FinalPerformance) error {
+	_, err := r.db.Exec(
+		`UPDATE strategies SET final_pnl = ?, final_win_rate = ?, final_profit_factor = ?, final_completed_trades = ? WHERE strategy_id = ?`,
+		p.PnL, p.WinRate, p.ProfitFactor, p.CompletedTrades, strategyID,
+	)
+	return err
+}
+
+// GetFinalPerformance returns ok=false if no snapshot was ever taken
+// (strategy not yet purged) rather than a zero-value FinalPerformance
+// that would look identical to "purged with zero trades."
+func (r *StrategyRepo) GetFinalPerformance(strategyID string) (FinalPerformance, bool, error) {
+	var p FinalPerformance
+	var pnl sql.NullString
+	err := r.db.QueryRow(
+		`SELECT final_pnl, final_win_rate, final_profit_factor, final_completed_trades FROM strategies WHERE strategy_id = ?`,
+		strategyID,
+	).Scan(&pnl, &p.WinRate, &p.ProfitFactor, &p.CompletedTrades)
+	if err != nil {
+		return FinalPerformance{}, false, err
+	}
+	if !pnl.Valid || pnl.String == "" {
+		return FinalPerformance{}, false, nil
+	}
+	p.PnL = pnl.String
+	return p, true, nil
+}
+
 func (r *StrategyRepo) ListStrategyIDs() ([]string, error) {
 	rows, err := r.db.Query(`SELECT strategy_id FROM strategies ORDER BY created_at`)
 	if err != nil {
