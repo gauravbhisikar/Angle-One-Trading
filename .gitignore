@@ -1,6 +1,10 @@
 # Secrets — never commit. Contains live Angel One PIN/TOTP secret and API keys.
 .env
 
+# Server-local only, kept out of the repo by request — copy it onto the
+# server directly instead of pulling it from git.
+/deploy.sh
+
 # Build artifacts (rebuild locally via start.bat / go build / pip install,
 # or on a server via deploy.sh)
 *.exe
