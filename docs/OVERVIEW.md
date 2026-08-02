@@ -84,7 +84,7 @@ Standalone Go module. The Decision Context Engine — aggregates connectors + me
 - **`regime_provider.go`** — rule-based bull/bear/sideways classification (disclosed formula).
 - **`recommendation_provider.go`** — regime playbook + lesson-based overrides.
 - **`research.go`** — curated-feed research: keyword-matches `connectors/news`/`connectors/rbi` headlines, fetches full bodies via `connectors/webreader`. Not general web search — no discovery-search API is wired in.
-- **`server.go`**, **`memory_handlers.go`** — the HTTP surface (`cmd/server/main.go` entrypoint, default `:8090`): `POST /context/build`, `POST /research/query`, `GET /health`, and `POST /memory/{strategy,context,backtest,deployment,lesson}` + `GET /memory/lessons` — the sole gateway the Python agent has into `memory/`, since it can't import Go code.
+- **`server.go`**, **`memory_handlers.go`** — the HTTP surface (`cmd/server/main.go` entrypoint, default `:9090`): `POST /context/build`, `POST /research/query`, `GET /health`, and `POST /memory/{strategy,context,backtest,deployment,lesson}` + `GET /memory/lessons` — the sole gateway the Python agent has into `memory/`, since it can't import Go code.
 
 ## `agent/`
 Python (LangGraph) module — built. Turns a `contextbuilder-server` context snapshot into a NIFTYBEES DSL strategy, backtests it, and explains why. Never executes trades or writes raw code; only produces DSL JSON the engine validates/runs. Talks to the engine and contextbuilder-server over HTTP only — see `agent/README.md` for the full graph shape.
@@ -93,7 +93,7 @@ Python (LangGraph) module — built. Turns a `contextbuilder-server` context sna
 - **`llm.py`** — OpenRouter client (`OPENROUTER_API_KEY`/`OPENROUTER_MODEL` in root `.env`), `None` if unconfigured; `invoke_structured` retries a structured call before falling back.
 - **`clients.py`** — thin HTTP clients for the engine + contextbuilder-server.
 - **`graph.py`** — the LangGraph `StateGraph` wiring all nodes; `run_agent(style)` entrypoint.
-- **`api.py`** — FastAPI wrapper (default `:8091`): `POST /generate`, `POST /deploy`.
+- **`api.py`** — FastAPI wrapper (default `:9091`): `POST /generate`, `POST /deploy`.
 - **`nodes/`** — `gather_context.py`, `plan.py` (the one real LLM judgment call — archetype/risk/holding from a fixed menu), `research.py`, `generate_dsl.py`, `templates.py` (deterministic DSL assembly, ported from the Strategy Lab's old client-side generator), `validate.py`, `backtest.py`, `rank.py`, `self_review.py` (LLM explanation grounded in a code-derived evidence checklist), `memory_update.py`, `schemas.py` (Pydantic structured-output shapes).
 
 ## `docs/`

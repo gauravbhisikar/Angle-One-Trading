@@ -36,8 +36,8 @@ Full `TaskBuildStrategy` run against a real running engine + real connectors + a
 ```go
 mgr, _ := memory.Open(ctx, "memory.db")
 builder := contextbuilder.NewBuilder(
-    contextbuilder.NewMarketProvider("http://localhost:8080"),
-    contextbuilder.NewPortfolioProvider("http://localhost:8080"),
+    contextbuilder.NewMarketProvider("http://localhost:9080"),
+    contextbuilder.NewPortfolioProvider("http://localhost:9080"),
     contextbuilder.NewMemoryProvider(mgr),
     contextbuilder.NewRegimeProvider(),
     contextbuilder.NewRecommendationProvider(),
@@ -50,7 +50,7 @@ dc, _ := builder.Build(ctx, contextbuilder.BuildRequest{
 // dc is the one structured object handed to the AI proposal step.
 ```
 
-Requires a running engine (for `PortfolioProvider`/`MarketProvider`'s feature-store lookup) — `go test ./... -run TestBuildStrategyContext -v` skips gracefully if `localhost:8099` isn't reachable.
+Requires a running engine (for `PortfolioProvider`/`MarketProvider`'s feature-store lookup) — `go test ./... -run TestBuildStrategyContext -v` skips gracefully if `localhost:9099` isn't reachable.
 
 ## HTTP server (`cmd/server`, `server.go`, `memory_handlers.go`)
 
@@ -61,7 +61,7 @@ into `Builder.Build`, research, and `memory/` — same reasoning as
 ```
 cd contextbuilder
 go build -o contextbuilder-server.exe ./cmd/server
-CONTEXTBUILDER_PORT=8090 ENGINE_URL=http://localhost:8080 MEMORY_DB_PATH=memory.db ./contextbuilder-server.exe
+CONTEXTBUILDER_PORT=9090 ENGINE_URL=http://localhost:9080 MEMORY_DB_PATH=memory.db ./contextbuilder-server.exe
 ```
 
 Routes:

@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-ENGINE_URL = os.getenv("ENGINE_URL", "http://localhost:8080")
-CONTEXTBUILDER_URL = os.getenv("CONTEXTBUILDER_URL", "http://localhost:8090")
+ENGINE_URL = os.getenv("ENGINE_URL", "http://localhost:9080")
+CONTEXTBUILDER_URL = os.getenv("CONTEXTBUILDER_URL", "http://localhost:9090")
 
 _client = httpx.Client(timeout=30.0)
 

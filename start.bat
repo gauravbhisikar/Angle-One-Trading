@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set API_ADDR=:8080
+set API_ADDR=:9080
 set SQLITE_PATH=trading.db
 set STARTING_CAPITAL=100000
 
@@ -33,11 +33,11 @@ if exist "%~dp0agent\venv\Scripts\python.exe" (
     echo Skipping agent — no venv found at agent\venv. See agent\README.md to set it up.
 )
 
-start "" /min powershell -NoProfile -Command "Start-Sleep -Seconds 2; Start-Process 'http://localhost:8080/'"
+start "" /min powershell -NoProfile -Command "Start-Sleep -Seconds 2; Start-Process 'http://localhost:9080/'"
 
 echo.
-echo Starting AI Trading Engine on http://localhost:8080
-echo (contextbuilder-server on :8090, agent on :8091 in separate minimized windows)
+echo Starting AI Trading Engine on http://localhost:9080
+echo (contextbuilder-server on :9090, agent on :9091 in separate minimized windows)
 echo Close this window (or Ctrl+C) to stop the engine. Close the other windows to stop them.
 echo.
 cd /d "%~dp0engine"

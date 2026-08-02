@@ -37,7 +37,7 @@ func Load(envPath string) (*Config, error) {
 		AngelTOTPSecret:  os.Getenv("ANGEL_TOTP_SECRET"),
 		SQLitePath:       getEnvDefault("SQLITE_PATH", "trading.db"),
 		FeatureStorePath: getEnvDefault("FEATURE_STORE_PATH", "features.db"),
-		APIAddr:          getEnvDefault("API_ADDR", ":8080"),
+		APIAddr:          getEnvDefault("API_ADDR", ":9080"),
 	}
 
 	max, err := strconv.Atoi(getEnvDefault("MAX_CONCURRENT_STRATEGIES", "10"))

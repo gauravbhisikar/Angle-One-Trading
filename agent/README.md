@@ -11,10 +11,10 @@ that the engine independently validates and runs (`docs/DSL_SPEC.md`).
 The agent process (`agent/`) never imports Go code — it can't, and
 shouldn't. It talks to two Go HTTP services:
 
-- **engine** (`ENGINE_URL`, default `:8080`) — `/strategies/validate`,
+- **engine** (`ENGINE_URL`, default `:9080`) — `/strategies/validate`,
   `/backtest`, `/backtest/sample-data`, strategy CRUD/lifecycle
   (`/strategies`, `/strategies/{id}/run`).
-- **contextbuilder-server** (`CONTEXTBUILDER_URL`, default `:8090`) —
+- **contextbuilder-server** (`CONTEXTBUILDER_URL`, default `:9090`) —
   `/context/build` (market/portfolio/memory/regime/recommendations, one
   call), `/research/query` (curated news+RBI feed search), and
   `/memory/*` read/write routes so the agent can persist what it did
@@ -100,7 +100,7 @@ DSL from that choice.
 cd agent
 python -m venv venv && venv\Scripts\activate  # or source venv/bin/activate
 pip install -r requirements.txt
-python api.py   # serves FastAPI on :8091 (AGENT_PORT)
+python api.py   # serves FastAPI on :9091 (AGENT_PORT)
 ```
 
 Requires `engine.exe` and `contextbuilder-server.exe` already running
@@ -123,9 +123,9 @@ Requires `engine.exe` and `contextbuilder-server.exe` already running
 ```
 OPENROUTER_API_KEY=
 OPENROUTER_MODEL=deepseek/deepseek-v4-pro
-ENGINE_URL=http://localhost:8080
-CONTEXTBUILDER_URL=http://localhost:8090
-AGENT_PORT=8091
+ENGINE_URL=http://localhost:9080
+CONTEXTBUILDER_URL=http://localhost:9090
+AGENT_PORT=9091
 ```
 
 If `OPENROUTER_API_KEY` is unset, every LLM node falls back to a

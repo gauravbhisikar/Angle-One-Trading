@@ -21,9 +21,9 @@ func getEnv(key, def string) string {
 }
 
 func main() {
-	engineURL := getEnv("ENGINE_URL", "http://localhost:8080")
+	engineURL := getEnv("ENGINE_URL", "http://localhost:9080")
 	memoryPath := getEnv("MEMORY_DB_PATH", "memory.db")
-	addr := ":" + getEnv("CONTEXTBUILDER_PORT", "8090")
+	addr := ":" + getEnv("CONTEXTBUILDER_PORT", "9090")
 
 	ctx := context.Background()
 	mgr, err := memory.Open(ctx, memoryPath)
