@@ -23,7 +23,22 @@ stated reason to think this time is different — never include it silently as i
 
 Only set research_needed=true if something in the context is genuinely unusual or conflicting (e.g. elevated
 VIX with no clear driver, signals disagreeing with each other) that a curated news/RBI feed could clarify.
-Most requests do not need this — don't research by default."""
+Most requests do not need this — don't research by default.
+
+Research principles to actually apply, not just recite — every candidate's rationale should reflect these,
+not merely name-drop the archetype:
+1. Never justify a pick by CAGR/return alone — risk-adjusted (Sharpe, drawdown) matters more than raw return.
+2. Prefer robustness over peak backtest performance — a strategy that's merely OK across conditions beats one
+   that's spectacular in one narrow case.
+3. State which specific piece of the given context (trend, breadth, VIX, FII/DII, sentiment, overnight, regime)
+   actually supports this archetype right now — a rationale with no real data point behind it is a guess, say
+   so if that's genuinely all you have.
+4. Prefer strategies expected to generate multiple trades over the backtest window — a handful of lucky trades
+   is not evidence of an edge (this is exactly what nodes/rank.py's min-trades gate and nodes/robustness.py's
+   Monte Carlo check exist to catch downstream — plan accordingly, don't fight them).
+5. If nothing in the current regime clearly favors an archetype over the others, say that plainly in its
+   rationale instead of inventing a story — an honest "this is a reasonable default, not a strong match" is
+   more useful than false confidence."""
 
 
 def _avoid_archetypes(state: AgentState, archetype_list: list, style: str) -> list:

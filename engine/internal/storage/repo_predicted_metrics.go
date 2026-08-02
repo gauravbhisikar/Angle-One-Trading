@@ -10,16 +10,19 @@ import (
 // live/paper performance (analytics.Compute over actual trades) without
 // having to re-run the backtest.
 type PredictedMetrics struct {
-	StrategyID   string
-	CAGR         float64
-	Sharpe       float64
-	Sortino      float64
-	Drawdown     float64
-	WinRate      float64
-	ProfitFactor float64
-	TotalTrades  int
-	Source       string // e.g. "agent" — where this prediction came from
-	CreatedAt    time.Time
+	StrategyID     string
+	CAGR           float64
+	Sharpe         float64
+	Sortino        float64
+	Drawdown       float64
+	WinRate        float64
+	ProfitFactor   float64
+	TotalTrades    int
+	Source         string // e.g. "agent" — where this prediction came from
+	Description    string // what the agent generated — the strategy in plain English
+	Rationale      string // why the agent picked/recommended it, grounded in real numbers
+	ConfidenceJSON string // full {score, breakdown, basis} blob from nodes/robustness.py, opaque to the engine
+	CreatedAt      time.Time
 }
 
 type PredictedMetricsRepo struct{ db *sql.DB }
@@ -34,13 +37,14 @@ func (r *PredictedMetricsRepo) Save(m PredictedMetrics) error {
 		m.CreatedAt = time.Now().UTC()
 	}
 	_, err := r.db.Exec(
-		`INSERT INTO predicted_metrics (strategy_id, cagr, sharpe, sortino, drawdown, win_rate, profit_factor, total_trades, source, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO predicted_metrics (strategy_id, cagr, sharpe, sortino, drawdown, win_rate, profit_factor, total_trades, source, description, rationale, confidence_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(strategy_id) DO UPDATE SET cagr=excluded.cagr, sharpe=excluded.sharpe, sortino=excluded.sortino,
 		 drawdown=excluded.drawdown, win_rate=excluded.win_rate, profit_factor=excluded.profit_factor,
-		 total_trades=excluded.total_trades, source=excluded.source, created_at=excluded.created_at`,
+		 total_trades=excluded.total_trades, source=excluded.source, description=excluded.description,
+		 rationale=excluded.rationale, confidence_json=excluded.confidence_json, created_at=excluded.created_at`,
 		m.StrategyID, m.CAGR, m.Sharpe, m.Sortino, m.Drawdown, m.WinRate, m.ProfitFactor, m.TotalTrades, m.Source,
-		m.CreatedAt.Format(rfc3339),
+		m.Description, m.Rationale, m.ConfidenceJSON, m.CreatedAt.Format(rfc3339),
 	)
 	return err
 }
@@ -49,10 +53,11 @@ func (r *PredictedMetricsRepo) Get(strategyID string) (PredictedMetrics, bool, e
 	var m PredictedMetrics
 	var createdAt string
 	err := r.db.QueryRow(
-		`SELECT strategy_id, cagr, sharpe, sortino, drawdown, win_rate, profit_factor, total_trades, source, created_at
+		`SELECT strategy_id, cagr, sharpe, sortino, drawdown, win_rate, profit_factor, total_trades, source, description, rationale, confidence_json, created_at
 		 FROM predicted_metrics WHERE strategy_id = ?`,
 		strategyID,
-	).Scan(&m.StrategyID, &m.CAGR, &m.Sharpe, &m.Sortino, &m.Drawdown, &m.WinRate, &m.ProfitFactor, &m.TotalTrades, &m.Source, &createdAt)
+	).Scan(&m.StrategyID, &m.CAGR, &m.Sharpe, &m.Sortino, &m.Drawdown, &m.WinRate, &m.ProfitFactor, &m.TotalTrades, &m.Source,
+		&m.Description, &m.Rationale, &m.ConfidenceJSON, &createdAt)
 	if err == sql.ErrNoRows {
 		return PredictedMetrics{}, false, nil
 	}

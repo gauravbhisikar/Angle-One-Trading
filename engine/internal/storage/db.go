@@ -7,6 +7,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -126,10 +127,26 @@ CREATE TABLE IF NOT EXISTS predicted_metrics (
 );
 `
 
+// predictedMetricsExtraColumns adds description/rationale/confidence_json
+// to predicted_metrics for databases created before those columns existed
+// — CREATE TABLE IF NOT EXISTS doesn't add columns to an already-existing
+// table, so a fresh ALTER TABLE per column is needed. SQLite has no "ADD
+// COLUMN IF NOT EXISTS", so a "duplicate column" error is expected and
+// ignored on every run after the first.
+var predictedMetricsExtraColumns = []string{
+	`ALTER TABLE predicted_metrics ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE predicted_metrics ADD COLUMN rationale TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE predicted_metrics ADD COLUMN confidence_json TEXT NOT NULL DEFAULT ''`,
+}
+
 func migrate(db *sql.DB) error {
-	_, err := db.Exec(schema)
-	if err != nil {
+	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("storage: migrate: %w", err)
+	}
+	for _, stmt := range predictedMetricsExtraColumns {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("storage: migrate predicted_metrics columns: %w", err)
+		}
 	}
 	return nil
 }

@@ -401,6 +401,19 @@ function backtestVsLiveHTML(predicted, live) {
   if (!predicted) {
     return '<div class="note">No backtest prediction recorded for this strategy (only strategies deployed from Strategy Lab get one).</div>';
   }
+
+  let confHTML = '';
+  if (predicted.ConfidenceJSON) {
+    try {
+      const conf = JSON.parse(predicted.ConfidenceJSON);
+      const maxPre = conf.max_pre_deployment_score || 75;
+      confHTML = '<div style="margin:10px 0;font-size:13px">Confidence at deploy time: <b>' + conf.score + '/100</b> ' +
+        '<span style="color:var(--muted)">(capped at ' + maxPre + '/100 pre-deployment — ' +
+        'paper_live_evidence was ' + (conf.breakdown ? conf.breakdown.paper_live_evidence : 0) + '/25 back then; ' +
+        'compare against real Live numbers below to see how it\'s actually panning out)</span></div>';
+    } catch (e) {}
+  }
+
   const rows = [
     ['CAGR', predicted.CAGR, live && live.CAGR, '%'],
     ['Sharpe', predicted.Sharpe, live && live.Sharpe, ''],
@@ -409,7 +422,12 @@ function backtestVsLiveHTML(predicted, live) {
     ['Profit Factor', predicted.ProfitFactor, live && live.ProfitFactor, ''],
     ['Trades', predicted.TotalTrades, live && live.TotalTrades, ''],
   ];
-  return '<div class="section-title">Backtest (predicted) vs Live (actual)</div>' +
+  return (predicted.Description || predicted.Rationale ? '<div class="section-title">What the agent generated</div><div class="card">' +
+      (predicted.Description ? '<p style="margin-top:0">' + predicted.Description + '</p>' : '') +
+      (predicted.Rationale ? '<div class="section-title" style="margin-top:0">Why it was picked</div><p style="margin-bottom:0">' + predicted.Rationale + '</p>' : '') +
+      confHTML +
+    '</div>' : '') +
+    '<div class="section-title" style="margin-top:16px">Backtest (predicted) vs Live (actual)</div>' +
     '<div class="card">' +
     '<div class="tourn-row header" style="grid-template-columns:1.4fr 1fr 1fr"><div>Metric</div><div>Backtest</div><div>Live so far</div></div>' +
     rows.map(([label, pred, act, suffix]) =>
@@ -716,7 +734,7 @@ function renderLabResult(root) {
           '<div>' + (m.Drawdown||0).toFixed(1) + '%</div>' + '<div>' + (m.TotalTrades||0) + '</div>' +
           '<div>' + (m.WinRate||0).toFixed(0) + '%</div>' + '<div>' + statusBadge + '</div>' +
         '</div><div class="expand-panel" id="expand-' + i + '" style="display:none">' +
-          c.rationale +
+          '<b>Hypothesis (before backtest):</b> ' + c.rationale +
           (c.gate_reasons && c.gate_reasons.length ? '<br><span style="color:var(--red)">Rejected: ' + c.gate_reasons.join(', ') + '</span>' : '') +
         '</div>';
       }).join('') + '</div>';
@@ -780,6 +798,8 @@ async function deploySelected() {
       await api('POST', '/strategies/' + res.strategy_id + '/predicted-metrics', {
         cagr: m.CAGR, sharpe: m.Sharpe, sortino: m.Sortino, drawdown: m.Drawdown,
         win_rate: m.WinRate, profit_factor: m.ProfitFactor, total_trades: m.TotalTrades, source: 'agent',
+        description: lab.result.description || '', rationale: lab.result.rationale || '',
+        confidence_json: sel.confidence ? JSON.stringify(sel.confidence) : '',
       }).catch(() => {}); // best-effort — deploy already succeeded, don't fail the flow over this
     }
     await refreshStrategies();

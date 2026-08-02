@@ -3,6 +3,7 @@
 
 # Build artifacts (rebuild locally via start.bat / go build / pip install)
 *.exe
+*.exe~
 *.db
 *.log
 

@@ -352,14 +352,17 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 }
 
 type predictedMetricsRequest struct {
-	CAGR         float64 `json:"cagr"`
-	Sharpe       float64 `json:"sharpe"`
-	Sortino      float64 `json:"sortino"`
-	Drawdown     float64 `json:"drawdown"`
-	WinRate      float64 `json:"win_rate"`
-	ProfitFactor float64 `json:"profit_factor"`
-	TotalTrades  int     `json:"total_trades"`
-	Source       string  `json:"source"`
+	CAGR           float64 `json:"cagr"`
+	Sharpe         float64 `json:"sharpe"`
+	Sortino        float64 `json:"sortino"`
+	Drawdown       float64 `json:"drawdown"`
+	WinRate        float64 `json:"win_rate"`
+	ProfitFactor   float64 `json:"profit_factor"`
+	TotalTrades    int     `json:"total_trades"`
+	Source         string  `json:"source"`
+	Description    string  `json:"description"`
+	Rationale      string  `json:"rationale"`
+	ConfidenceJSON string  `json:"confidence_json"`
 }
 
 // handleSavePredictedMetrics records what a backtest predicted at deploy
@@ -382,6 +385,7 @@ func (s *Server) handleSavePredictedMetrics(w http.ResponseWriter, r *http.Reque
 		StrategyID: id, CAGR: req.CAGR, Sharpe: req.Sharpe, Sortino: req.Sortino,
 		Drawdown: req.Drawdown, WinRate: req.WinRate, ProfitFactor: req.ProfitFactor,
 		TotalTrades: req.TotalTrades, Source: req.Source,
+		Description: req.Description, Rationale: req.Rationale, ConfidenceJSON: req.ConfidenceJSON,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
