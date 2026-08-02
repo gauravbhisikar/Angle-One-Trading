@@ -496,7 +496,12 @@ async function renderAnalytics() {
 }
 
 /* ---------- STRATEGY LAB (AI agent) ---------- */
-const AGENT_BASE = 'http://localhost:9091';
+// Derived from the current page's own hostname, not hardcoded "localhost"
+// — this page is viewed from a browser that could be on a different
+// machine than the server (e.g. deployed on a remote box), so "localhost"
+// would resolve to the VIEWER's machine, not the server. Same host as the
+// page itself, just the agent's own port.
+const AGENT_BASE = window.location.protocol + '//' + window.location.hostname + ':9091';
 async function agentApi(method, path, body) {
   const opts = {method};
   if (body !== undefined) {

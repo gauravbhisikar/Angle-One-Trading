@@ -1,11 +1,18 @@
 # Secrets — never commit. Contains live Angel One PIN/TOTP secret and API keys.
 .env
 
-# Build artifacts (rebuild locally via start.bat / go build / pip install)
+# Build artifacts (rebuild locally via start.bat / go build / pip install,
+# or on a server via deploy.sh)
 *.exe
 *.exe~
 *.db
 *.log
+/engine/engine
+/contextbuilder/contextbuilder-server
+
+# deploy.sh runtime state (PID files, service logs)
+/logs/
+/.pids/
 
 # Python
 agent/venv/
