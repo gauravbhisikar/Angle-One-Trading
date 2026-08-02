@@ -22,24 +22,46 @@ mkdir -p "$LOG_DIR" "$PID_DIR"
 log() { echo "[deploy] $*"; }
 
 # ---------- 0a. system prerequisites ----------
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
+
 SUDO=""
 if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; fi
 
-need_install=()
-command -v git >/dev/null 2>&1 || need_install+=(git)
-command -v curl >/dev/null 2>&1 || need_install+=(curl)
-command -v python3 >/dev/null 2>&1 || need_install+=(python3)
-python3 -c "import venv" >/dev/null 2>&1 || need_install+=(python3-venv)
-command -v pip3 >/dev/null 2>&1 || need_install+=(python3-pip)
+command -v git >/dev/null 2>&1 || need_install_git=1
+command -v curl >/dev/null 2>&1 || need_install_curl=1
+command -v python3 >/dev/null 2>&1 || need_install_python3=1
+python3 -c "import venv" >/dev/null 2>&1 || need_install_venv=1
+command -v pip3 >/dev/null 2>&1 || need_install_pip=1
 
-if [ "${#need_install[@]}" -gt 0 ]; then
+if [ -n "${need_install_git:-}${need_install_curl:-}${need_install_python3:-}${need_install_venv:-}${need_install_pip:-}" ]; then
   if command -v apt-get >/dev/null 2>&1; then
-    log "installing missing packages via apt: ${need_install[*]}"
+    pkgs=(); [ -n "${need_install_git:-}" ] && pkgs+=(git); [ -n "${need_install_curl:-}" ] && pkgs+=(curl)
+    [ -n "${need_install_python3:-}" ] && pkgs+=(python3); [ -n "${need_install_venv:-}" ] && pkgs+=(python3-venv)
+    [ -n "${need_install_pip:-}" ] && pkgs+=(python3-pip)
+    log "installing via apt: ${pkgs[*]}"
     $SUDO apt-get update -qq
-    $SUDO apt-get install -y -qq "${need_install[@]}"
+    $SUDO apt-get install -y -qq "${pkgs[@]}"
+  elif command -v dnf >/dev/null 2>&1; then
+    pkgs=(); [ -n "${need_install_git:-}" ] && pkgs+=(git); [ -n "${need_install_curl:-}" ] && pkgs+=(curl)
+    [ -n "${need_install_python3:-}" ] && pkgs+=(python3); [ -n "${need_install_venv:-}${need_install_pip:-}" ] && pkgs+=(python3-pip)
+    log "installing via dnf: ${pkgs[*]}"
+    $SUDO dnf install -y -q "${pkgs[@]}"
+  elif command -v yum >/dev/null 2>&1; then
+    pkgs=(); [ -n "${need_install_git:-}" ] && pkgs+=(git); [ -n "${need_install_curl:-}" ] && pkgs+=(curl)
+    [ -n "${need_install_python3:-}" ] && pkgs+=(python3); [ -n "${need_install_venv:-}${need_install_pip:-}" ] && pkgs+=(python3-pip)
+    log "installing via yum: ${pkgs[*]}"
+    $SUDO yum install -y -q "${pkgs[@]}"
+  elif command -v apk >/dev/null 2>&1; then
+    pkgs=(); [ -n "${need_install_git:-}" ] && pkgs+=(git); [ -n "${need_install_curl:-}" ] && pkgs+=(curl)
+    [ -n "${need_install_python3:-}" ] && pkgs+=(python3); [ -n "${need_install_venv:-}" ] && pkgs+=(py3-virtualenv)
+    [ -n "${need_install_pip:-}" ] && pkgs+=(py3-pip)
+    log "installing via apk: ${pkgs[*]}"
+    $SUDO apk add --quiet "${pkgs[@]}"
   else
-    log "ERROR: missing ${need_install[*]} and this isn't an apt-based system."
-    log "Install them manually with your distro's package manager, then rerun."
+    log "ERROR: missing required tools and no known package manager (apt-get/dnf/yum/apk) found."
+    log "Install manually: git, curl, python3, python3-venv, python3-pip — then rerun."
     exit 1
   fi
 fi
