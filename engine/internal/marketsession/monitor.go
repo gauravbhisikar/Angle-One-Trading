@@ -77,21 +77,26 @@ func (m *Monitor) checkAndAct() {
 	status := Current(m.now())
 
 	m.mu.Lock()
-	first := !m.haveStatus
-	transitioned := first || status.Open != m.wasOpen
+	openedNow := (!m.haveStatus || !m.wasOpen) && status.Open
 	m.wasOpen = status.Open
 	m.haveStatus = true
 	m.mu.Unlock()
 
-	if !transitioned {
+	if status.Open {
+		if openedNow {
+			m.onOpen(status)
+		}
 		return
 	}
 
-	if status.Open {
-		m.onOpen(status)
-	} else {
-		m.onClose(status)
-	}
+	// Enforce every tick while closed, not just on the open->closed edge —
+	// a strategy /run while the market is ALREADY closed (started mid-
+	// weekend, mid-holiday, or after a manual Resume by mistake) never
+	// produces a transition, so an edge-only check would leave it running
+	// unattended for the rest of the closed period. onClose itself only
+	// touches strategies still StateRunning, so re-pausing an
+	// already-paused one here is a cheap no-op, not repeated work.
+	m.onClose(status)
 }
 
 func (m *Monitor) onOpen(status Status) {
@@ -135,5 +140,11 @@ func (m *Monitor) onClose(status Status) {
 	}
 	m.mu.Unlock()
 
-	m.log(SystemLogStrategyID, "info", fmt.Sprintf("market_close (%s) at %s IST — auto-paused %d running strategies", status.Reason, status.ISTTime, paused))
+	// Only log a summary when something actually happened — onClose now
+	// runs every tick while the market stays closed (not just on the
+	// open->closed edge), so an unconditional log here would spam the
+	// system log every interval for the whole length of a weekend/holiday.
+	if paused > 0 {
+		m.log(SystemLogStrategyID, "info", fmt.Sprintf("market_close (%s) at %s IST — auto-paused %d running strategies", status.Reason, status.ISTTime, paused))
+	}
 }
