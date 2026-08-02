@@ -18,6 +18,7 @@ import (
 
 	"tradingengine/internal/api"
 	"tradingengine/internal/config"
+	"tradingengine/internal/evalcutoff"
 	"tradingengine/internal/execution"
 	"tradingengine/internal/featurestore"
 	"tradingengine/internal/marketdata"
@@ -115,6 +116,12 @@ func main() {
 	// analysis, not just a runtime state flip nobody can see afterward.
 	sessionMonitor := marketsession.NewMonitor(eng, logs, time.Duration(cfg.MarketSessionPollSeconds)*time.Second)
 	go sessionMonitor.Run(ctx)
+
+	// Auto-pauses a strategy once it has run long enough to judge before
+	// real money is committed: intraday after 30 days, swing after 7
+	// completed trades. See internal/evalcutoff/monitor.go.
+	cutoffMonitor := evalcutoff.NewMonitor(eng, strategies, trades, logs, time.Duration(cfg.MarketSessionPollSeconds)*time.Second)
+	go cutoffMonitor.Run(ctx)
 
 	httpServer := &http.Server{Addr: cfg.APIAddr, Handler: server.Handler()}
 	go func() {

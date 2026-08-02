@@ -91,6 +91,36 @@ func (r *StrategyRepo) DeleteStrategy(strategyID string) error {
 	return nil
 }
 
+// SetFirstRunAt records when a strategy was FIRST started, once — a
+// second/third/Nth /run call (resume after pause, redeploy, etc.) never
+// overwrites it. This is what evalcutoff.Monitor anchors the intraday
+// 30-day evaluation window to; it has to survive engine restarts (unlike
+// the in-memory scheduler runtime), which is why it's a DB column, not
+// just tracked in the running process.
+func (r *StrategyRepo) SetFirstRunAt(strategyID string, t time.Time) error {
+	_, err := r.db.Exec(
+		`UPDATE strategies SET first_run_at = ? WHERE strategy_id = ? AND (first_run_at IS NULL OR first_run_at = '')`,
+		t.UTC().Format(time.RFC3339), strategyID,
+	)
+	return err
+}
+
+func (r *StrategyRepo) GetFirstRunAt(strategyID string) (time.Time, bool, error) {
+	var raw sql.NullString
+	err := r.db.QueryRow(`SELECT first_run_at FROM strategies WHERE strategy_id = ?`, strategyID).Scan(&raw)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if !raw.Valid || raw.String == "" {
+		return time.Time{}, false, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw.String)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return t, true, nil
+}
+
 func (r *StrategyRepo) ListStrategyIDs() ([]string, error) {
 	rows, err := r.db.Query(`SELECT strategy_id FROM strategies ORDER BY created_at`)
 	if err != nil {

@@ -297,6 +297,24 @@ function strategyCard(s, opts) {
       '<div>Win rate <b>' + s.win_rate.toFixed(1) + '%</b></div>' +
       '<div>Open positions <b>' + s.open_positions + '</b></div>' +
       '<div>Completed <b>' + s.completed_trades + '</b></div>' +
+    '</div>' + evalProgressHTML(s) + '</div>';
+}
+
+// Evaluation-period progress toward evalcutoff's auto-pause threshold —
+// 30 days running for intraday, 7 completed trades for swing — so the
+// user can see at a glance how close a paper-trading run is to producing
+// a judgeable sample, before committing real money.
+function evalProgressHTML(s) {
+  if (!s.eval_limit) return '';
+  const unit = s.type === 'intraday' ? 'days' : 'trades';
+  const pct = Math.min(100, (s.eval_progress / s.eval_limit) * 100);
+  const label = s.eval_cutoff_reached
+    ? 'Evaluation window complete (' + s.eval_progress + ' ' + unit + ') — auto-paused for review'
+    : s.eval_progress + ' / ' + s.eval_limit + ' ' + unit + ' toward evaluation cutoff';
+  return '<div style="margin-top:8px">' +
+    '<div style="font-size:10px;color:var(--muted);margin-bottom:2px">' + label + '</div>' +
+    '<div style="height:4px;border-radius:2px;background:var(--border);overflow:hidden">' +
+      '<div style="height:100%;width:' + pct + '%;background:' + (s.eval_cutoff_reached ? 'var(--amber)' : 'var(--blue)') + '"></div>' +
     '</div></div>';
 }
 

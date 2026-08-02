@@ -29,7 +29,8 @@ const schema = `
 CREATE TABLE IF NOT EXISTS strategies (
 	strategy_id TEXT PRIMARY KEY,
 	name        TEXT NOT NULL,
-	created_at  TEXT NOT NULL
+	created_at  TEXT NOT NULL,
+	first_run_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS strategy_versions (
@@ -139,6 +140,13 @@ var predictedMetricsExtraColumns = []string{
 	`ALTER TABLE predicted_metrics ADD COLUMN confidence_json TEXT NOT NULL DEFAULT ''`,
 }
 
+// strategiesExtraColumns adds first_run_at to strategies for databases
+// created before evalcutoff existed — same duplicate-column-tolerant
+// pattern as predictedMetricsExtraColumns.
+var strategiesExtraColumns = []string{
+	`ALTER TABLE strategies ADD COLUMN first_run_at TEXT NOT NULL DEFAULT ''`,
+}
+
 func migrate(db *sql.DB) error {
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("storage: migrate: %w", err)
@@ -146,6 +154,11 @@ func migrate(db *sql.DB) error {
 	for _, stmt := range predictedMetricsExtraColumns {
 		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("storage: migrate predicted_metrics columns: %w", err)
+		}
+	}
+	for _, stmt := range strategiesExtraColumns {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("storage: migrate strategies columns: %w", err)
 		}
 	}
 	return nil

@@ -2,8 +2,10 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"tradingengine/internal/analytics"
+	"tradingengine/internal/evalcutoff"
 	"tradingengine/internal/models"
 )
 
@@ -24,6 +26,16 @@ type StrategySummary struct {
 	WinRate         float64  `json:"win_rate"`
 	ProfitFactor    float64  `json:"profit_factor"`
 	CompletedTrades int      `json:"completed_trades"`
+
+	// Evaluation-period progress toward evalcutoff's auto-pause threshold
+	// (30 days for intraday, 7 completed trades for swing) — so the
+	// dashboard can show "how close is this to a real judgeable sample"
+	// before the user commits real money. EvalLimit is the threshold
+	// itself (days or trades depending on Type), so the UI never has to
+	// hardcode evalcutoff's constants separately.
+	EvalProgress      int  `json:"eval_progress"`       // days running (intraday) or completed trades (swing)
+	EvalLimit         int  `json:"eval_limit"`          // IntradayMaxAge in days, or SwingMaxExitTrades
+	EvalCutoffReached bool `json:"eval_cutoff_reached"`
 }
 
 // handleListStrategies is the dashboard's single overview call: every
@@ -64,6 +76,20 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		evalProgress, evalLimit, evalReached := 0, 0, false
+		switch strat.Type {
+		case models.StrategyIntraday:
+			evalLimit = int(evalcutoff.IntradayMaxAge.Hours() / 24)
+			if firstRun, ok, err := s.Strategies.GetFirstRunAt(id); err == nil && ok {
+				evalProgress = int(time.Since(firstRun).Hours() / 24)
+				evalReached = evalProgress >= evalLimit
+			}
+		case models.StrategySwing:
+			evalLimit = evalcutoff.SwingMaxExitTrades
+			evalProgress = completed
+			evalReached = evalProgress >= evalLimit
+		}
+
 		out = append(out, StrategySummary{
 			StrategyID: strat.StrategyID, StrategyName: strat.StrategyName, StrategyVersion: strat.StrategyVersion,
 			Type: string(strat.Type), AssetType: string(strat.AssetType), Symbols: strat.Symbols,
@@ -71,6 +97,7 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			Status: status, OpenPositions: openPositions,
 			StartingCapital: s.DefaultStartingCapital.String(), Cash: cash.String(), PnL: totalPnL.String(),
 			WinRate: m.WinRate, ProfitFactor: m.ProfitFactor, CompletedTrades: completed,
+			EvalProgress: evalProgress, EvalLimit: evalLimit, EvalCutoffReached: evalReached,
 		})
 	}
 
