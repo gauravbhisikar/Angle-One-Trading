@@ -1,6 +1,7 @@
 from state import AgentState
 from llm import get_llm, invoke_structured
 from nodes.schemas import SelfReview
+from context_glossary import CONTEXT_GLOSSARY
 
 SELF_REVIEW_SYSTEM_PROMPT = """You are explaining a trading strategy tournament's outcome to the user who will
 decide whether to deploy it to paper trading. Ground every claim ONLY in the real numbers and context given
@@ -32,7 +33,9 @@ if it were fine.
 If decision context lessons or the avoid-list influenced which archetype was even proposed, note in weaknesses
 that this project has no walk-forward/regime-segmented validation yet — a lesson built from past paper-trading
 samples describes what happened under past conditions, not a guarantee this candidate keeps working if the
-regime shifts. State that plainly rather than implying past success is proof of a durable edge."""
+regime shifts. State that plainly rather than implying past success is proof of a durable edge.
+
+""" + CONTEXT_GLOSSARY
 
 
 def _evidence_checklist(state: AgentState) -> dict:

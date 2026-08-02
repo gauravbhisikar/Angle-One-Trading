@@ -1,6 +1,7 @@
 from state import AgentState
 from llm import get_llm, invoke_structured
 from nodes.schemas import Plan, CandidatePlan, IntradayPlan, IntradayCandidatePlan, ARCHETYPES, INTRADAY_ARCHETYPES
+from context_glossary import CONTEXT_GLOSSARY
 
 # Same threshold contextbuilder/recommendation_provider.go already uses for
 # style-level avoidance (a lesson with <35% success over >=5 observations
@@ -43,7 +44,9 @@ not merely name-drop the archetype:
    conditions — they are not a guarantee of future performance. A high-confidence lesson can still stop working
    if the regime shifts (this project has no walk-forward/regime-segmented validation yet — see BACKLOG.md), and
    a low-observation lesson (just above 5) could still be noise. Never phrase a lesson-based choice as 'this is
-   proven to work' — phrase it as 'this is what the sample seen so far supports'."""
+   proven to work' — phrase it as 'this is what the sample seen so far supports'.
+
+""" + CONTEXT_GLOSSARY
 
 
 def _avoid_archetypes(state: AgentState, archetype_list: list, style: str) -> list:
