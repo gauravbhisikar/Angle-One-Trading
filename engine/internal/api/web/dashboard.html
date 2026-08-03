@@ -132,6 +132,7 @@
     <div class="section-label">Strategies</div>
     <div id="sidebar-strategies"></div>
     <button class="newstrat-btn" onclick="goTo('lab')">+ New Strategy</button>
+    <div id="build-version" style="position:absolute;bottom:8px;left:16px;font-size:10px;color:var(--muted)" title="Backend build commit — compare against the commit you just pushed to confirm a redeploy actually took">build: …</div>
   </nav>
 
   <div class="main">
@@ -991,6 +992,9 @@ async function deploySelected() {
 }
 
 /* ---------- boot ---------- */
+api('GET', '/version').then(v => {
+  document.getElementById('build-version').textContent = 'build: ' + (v.commit || 'dev');
+}).catch(() => {});
 refreshMarket(); refreshStrategies();
 setInterval(refreshMarket, 5000);
 setInterval(refreshStrategies, 5000);

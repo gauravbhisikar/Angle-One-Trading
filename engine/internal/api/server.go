@@ -45,6 +45,11 @@ type Config struct {
 	// position instead of just the entry price, without a second,
 	// possibly-inconsistent price source.
 	PriceLookup func(symbol string) (decimal.Decimal, bool)
+
+	// BuildCommit is the git short commit hash baked in at build time
+	// (deploy.sh's -ldflags) — exposed via GET /version and shown in the
+	// dashboard footer so a redeploy is verifiable by looking at the page.
+	BuildCommit string
 }
 
 type Server struct {
@@ -75,6 +80,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /backtest/sample-data-intraday", s.handleSampleIntradayHistory)
 	s.mux.HandleFunc("GET /market/status", s.handleMarketStatus)
 	s.mux.HandleFunc("GET /market/price/{symbol}", s.handleMarketPrice)
+	s.mux.HandleFunc("GET /version", s.handleVersion)
 	s.mux.HandleFunc("GET /system/logs", s.handleSystemLogs)
 	s.mux.HandleFunc("GET /strategies", s.handleListStrategies)
 	s.mux.HandleFunc("GET /strategies/{id}/equity-curve", s.handleEquityCurve)

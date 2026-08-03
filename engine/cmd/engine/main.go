@@ -30,6 +30,15 @@ import (
 	"tradingengine/internal/storage"
 )
 
+// buildCommit is set at build time via deploy.sh's -ldflags (git short
+// commit hash) — exposed through GET /version and shown in the dashboard
+// footer specifically so "is this actually the new build" is answerable
+// by looking at the page, not by grepping the served HTML for a string
+// that happens to be new/removed (real incident: a redeploy "succeeded"
+// per its own health check while a stale process kept serving old code
+// on the port — this makes that class of mistake visible immediately).
+var buildCommit = "dev"
+
 func main() {
 	envPath := "../.env"
 	if _, err := os.Stat(".env"); err == nil {
@@ -106,6 +115,7 @@ func main() {
 		FeatureStore:           featureStore,
 		DefaultStartingCapital: startingCapital,
 		PriceLookup:            priceLookup,
+		BuildCommit:            buildCommit,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
