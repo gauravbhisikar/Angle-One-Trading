@@ -57,19 +57,25 @@ class Plan(BaseModel):
 # — the LLM's structured output never has to emit the actual candidate
 # count, that's handled entirely in plain Python downstream.
 class DimensionSelectionPlan(BaseModel):
-    trend_filters: list[Literal[*TREND_FILTER_NAMES]] = Field(
+    # Literal[tuple(names)] — NOT Literal[*names] — deliberately: the star-
+    # unpacking form is Python 3.11+ only (PEP 646 generic unpacking); the
+    # server this ran on shipped an older python3 and failed at import with
+    # a SyntaxError before this fix. Literal[tuple(x)] produces the exact
+    # same type (Literal.__getitem__ receives one tuple either way Python
+    # builds it) and has worked since Literal itself existed (3.8+).
+    trend_filters: list[Literal[tuple(TREND_FILTER_NAMES)]] = Field(
         description="Which trend-filter values to try today — 'none' is always a valid choice for a pure mean-reversion/breakout approach.",
         min_length=1, max_length=4,
     )
-    entry_triggers: list[Literal[*ENTRY_TRIGGER_NAMES]] = Field(
+    entry_triggers: list[Literal[tuple(ENTRY_TRIGGER_NAMES)]] = Field(
         description="Which entry-trigger values to try today — pick a genuine mix (mean-reversion, breakout, trend-follow), not near-duplicates.",
         min_length=2, max_length=6,
     )
-    confirmations: list[Literal[*CONFIRMATION_NAMES]] = Field(
+    confirmations: list[Literal[tuple(CONFIRMATION_NAMES)]] = Field(
         description="Which confirmation values to try today — 'none' is always a valid choice.",
         min_length=1, max_length=3,
     )
-    exit_styles: list[Literal[*EXIT_STYLE_NAMES]] = Field(
+    exit_styles: list[Literal[tuple(EXIT_STYLE_NAMES)]] = Field(
         description="Which exit-style values to try today — 'tp_sl_only' is always a valid choice.",
         min_length=1, max_length=3,
     )
