@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -30,10 +31,16 @@ type backtestCandle struct {
 }
 
 type backtestRequest struct {
-	Strategy           json.RawMessage  `json:"strategy"`
-	Candles            []backtestCandle `json:"candles"`
-	StartingCapital    float64          `json:"starting_capital"`
-	BenchmarkReturnPct float64          `json:"benchmark_return_pct"` // e.g. NIFTYBEES buy-and-hold over the same period — caller computes this from the same candles, engine never fetches its own benchmark data
+	Strategy json.RawMessage  `json:"strategy"`
+	Candles  []backtestCandle `json:"candles"`
+	// CandlesByTimeframe supplies additional timeframes a rule's
+	// per-leaf Timeframe override references (e.g. a 5m entry gated by a
+	// 15m trend filter) — keyed by the timeframe string. Candles is still
+	// required for the strategy's OWN declared timeframe; this is only
+	// for extra ones. Omit entirely for a single-timeframe strategy.
+	CandlesByTimeframe map[string][]backtestCandle `json:"candles_by_timeframe,omitempty"`
+	StartingCapital    float64                     `json:"starting_capital"`
+	BenchmarkReturnPct float64                      `json:"benchmark_return_pct"` // e.g. NIFTYBEES buy-and-hold over the same period — caller computes this from the same candles, engine never fetches its own benchmark data
 }
 
 type backtestResponse struct {
@@ -77,20 +84,38 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	candles := make([]models.Candle, 0, len(req.Candles))
-	for i, c := range req.Candles {
-		t, err := time.Parse(time.RFC3339, c.Time)
+	toCandles := func(tf models.Timeframe, raw []backtestCandle) ([]models.Candle, error) {
+		out := make([]models.Candle, 0, len(raw))
+		for i, c := range raw {
+			t, err := time.Parse(time.RFC3339, c.Time)
+			if err != nil {
+				return nil, fmt.Errorf("candle[%d].time: %w", i, err)
+			}
+			out = append(out, models.Candle{
+				Symbol: strat.Symbols[0], Timeframe: tf,
+				OpenTime: t, CloseTime: t,
+				Open: decimal.NewFromFloat(c.Open), High: decimal.NewFromFloat(c.High),
+				Low: decimal.NewFromFloat(c.Low), Close: decimal.NewFromFloat(c.Close),
+				Volume: c.Volume, Closed: true,
+			})
+		}
+		return out, nil
+	}
+
+	primaryCandles, err := toCandles(strat.Timeframe, req.Candles)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	candlesByTF := map[models.Timeframe][]models.Candle{strat.Timeframe: primaryCandles}
+	for tfStr, raw := range req.CandlesByTimeframe {
+		tf := models.Timeframe(tfStr)
+		extra, err := toCandles(tf, raw)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "candle["+itoa(i)+"].time: "+err.Error())
+			writeError(w, http.StatusBadRequest, "candles_by_timeframe["+tfStr+"]: "+err.Error())
 			return
 		}
-		candles = append(candles, models.Candle{
-			Symbol: strat.Symbols[0], Timeframe: strat.Timeframe,
-			OpenTime: t, CloseTime: t,
-			Open: decimal.NewFromFloat(c.Open), High: decimal.NewFromFloat(c.High),
-			Low: decimal.NewFromFloat(c.Low), Close: decimal.NewFromFloat(c.Close),
-			Volume: c.Volume, Closed: true,
-		})
+		candlesByTF[tf] = extra
 	}
 
 	startingCapital := s.DefaultStartingCapital
@@ -98,14 +123,14 @@ func (s *Server) handleBacktest(w http.ResponseWriter, r *http.Request) {
 		startingCapital = decimal.NewFromFloat(req.StartingCapital)
 	}
 
-	result, err := backtest.Run(strat, candles, startingCapital, req.BenchmarkReturnPct)
+	result, err := backtest.Run(strat, candlesByTF, startingCapital, req.BenchmarkReturnPct)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 
-	firstTime := candles[0].OpenTime
-	lastTime := candles[len(candles)-1].OpenTime
+	firstTime := primaryCandles[0].OpenTime
+	lastTime := primaryCandles[len(primaryCandles)-1].OpenTime
 	review := analytics.GenerateAIReview(strat.StrategyID, strat.StrategyVersion, "", firstTime, lastTime,
 		result.Trades, result.OpenPositions, startingCapital, req.BenchmarkReturnPct)
 

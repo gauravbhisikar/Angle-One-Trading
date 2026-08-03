@@ -18,6 +18,7 @@ package backtest
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/shopspring/decimal"
 
@@ -41,15 +42,66 @@ type Result struct {
 	Logs          []string
 }
 
-// Run backtests strat against candles (must already be sorted oldest
-// first, one symbol, timeframe matching strat.Timeframe — v1 scope is
-// single-symbol, matching the engine's current NIFTYBEES-only design).
-// Fill simulation is FillBasic (instant fill at candle close +
-// slippage) — the same realistic-but-simple model the live paper broker
-// uses in its default mode.
-func Run(strat *dsl.Strategy, candles []models.Candle, startingCapital decimal.Decimal, benchmarkReturnPct float64) (Result, error) {
-	if len(candles) == 0 {
-		return Result{}, fmt.Errorf("backtest: no candles provided")
+// timedCandle pairs a candle with the timeframe it belongs to, so a
+// multi-timeframe merge can be sorted without losing which series each
+// one came from.
+type timedCandle struct {
+	tf     models.Timeframe
+	candle models.Candle
+}
+
+// timeframeSortKey ranks a timeframe for tie-breaking two candles that
+// close at the exact same instant — finer-grained first, mirroring the
+// live pipeline's guarantee that a shorter timeframe's tick lands before
+// a coarser one closing at the same boundary. 1d/1w have no fixed-minute
+// entry in models.TimeframeMinutes (they're session-based), so they sort
+// last in a tie, which is never actually reachable in practice (nothing
+// shares a close instant with a daily/weekly candle).
+func timeframeSortKey(tf models.Timeframe) int {
+	if m, ok := models.TimeframeMinutes[tf]; ok {
+		return m
+	}
+	return 1 << 30
+}
+
+// mergeByTime flattens every timeframe's candle slice into one
+// chronological stream, so a single pass can drive both the indicator
+// cache (every timeframe needs updating) and the strategy runtime (which
+// only acts on its own declared timeframe, exactly like the live pipeline
+// dispatches every timeframe's close to every listener and lets the
+// runtime itself filter — see strategy.Runtime.OnCandleClose).
+func mergeByTime(candlesByTF map[models.Timeframe][]models.Candle) []timedCandle {
+	total := 0
+	for _, cs := range candlesByTF {
+		total += len(cs)
+	}
+	merged := make([]timedCandle, 0, total)
+	for tf, cs := range candlesByTF {
+		for _, c := range cs {
+			merged = append(merged, timedCandle{tf: tf, candle: c})
+		}
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		ti, tj := merged[i].candle.CloseTime, merged[j].candle.CloseTime
+		if !ti.Equal(tj) {
+			return ti.Before(tj)
+		}
+		return timeframeSortKey(merged[i].tf) < timeframeSortKey(merged[j].tf)
+	})
+	return merged
+}
+
+// Run backtests strat against candlesByTF — one candle slice per
+// timeframe the strategy's condition tree references (always at least
+// its own declared Timeframe; more if any rule uses a per-leaf Timeframe
+// override, e.g. a 5m entry gated by a 15m trend filter). Each slice must
+// already be sorted oldest first. v1 scope is single-symbol, matching the
+// engine's current NIFTYBEES-only design. Fill simulation is FillBasic
+// (instant fill at candle close + slippage) — the same realistic-but-
+// simple model the live paper broker uses in its default mode.
+func Run(strat *dsl.Strategy, candlesByTF map[models.Timeframe][]models.Candle, startingCapital decimal.Decimal, benchmarkReturnPct float64) (Result, error) {
+	if len(candlesByTF[strat.Timeframe]) == 0 {
+		return Result{}, fmt.Errorf("backtest: no candles provided for strategy's own timeframe %s", strat.Timeframe)
 	}
 	if len(strat.Symbols) == 0 {
 		return Result{}, fmt.Errorf("backtest: strategy has no symbols")
@@ -106,14 +158,33 @@ func Run(strat *dsl.Strategy, candles []models.Candle, startingCapital decimal.D
 		return Result{}, fmt.Errorf("backtest: %w", err)
 	}
 
+	// Every timeframe the strategy's own condition tree references must
+	// have candles supplied — previously a rule with a non-default
+	// Timeframe would subscribe successfully then silently never resolve
+	// ("still warming up" forever, the leaf just never fires), because
+	// this runner only ever replayed one timeframe. This turns that into
+	// a loud, immediate error instead of a strategy that quietly never
+	// trades.
+	for _, tf := range rt.RequiredTimeframes() {
+		if len(candlesByTF[tf]) == 0 {
+			return Result{}, fmt.Errorf("backtest: strategy references timeframe %s via a rule but no candles were supplied for it", tf)
+		}
+	}
+
 	ctx := context.Background()
-	for _, c := range candles {
-		currentPrice = c.Close
-		// Indicator cache must update before the strategy reads it for the
-		// SAME candle — same ordering guarantee the live pipeline enforces
-		// via Pipeline.SetIndicatorUpdater (ENGINE_SPEC Sec 0.4).
-		cache.OnCandleClose(symbol, string(strat.Timeframe), c)
-		rt.OnCandleClose(ctx, symbol, strat.Timeframe, c)
+	// Indicator cache updates for EVERY timeframe's candle close (a rule
+	// on a non-default timeframe needs its cache entry kept current even
+	// on bars the strategy's own OnCandleClose ignores); rt.OnCandleClose
+	// is likewise called for every candle and filters to its own
+	// Strategy.Timeframe internally (runtime.go) — this exactly mirrors
+	// how the live scheduler dispatches every timeframe's close to every
+	// listener and lets the runtime itself decide relevance.
+	for _, tc := range mergeByTime(candlesByTF) {
+		cache.OnCandleClose(symbol, string(tc.tf), tc.candle)
+		if tc.tf == strat.Timeframe {
+			currentPrice = tc.candle.Close
+		}
+		rt.OnCandleClose(ctx, symbol, tc.tf, tc.candle)
 	}
 
 	m := analytics.Compute(trades, startingCapital, benchmarkReturnPct)

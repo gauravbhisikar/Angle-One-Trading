@@ -109,12 +109,13 @@ def parameter_stability(dsl: dict, candles: list, benchmark: float, starting_cap
     if not indicator:
         return {"ran": False, "reason": "no perturbable indicator found in entry/exit rules"}
 
+    primary_tf = dsl.get("timeframe", "1d")
     sharpes = []
     for deltas in PERTURBATIONS[indicator]:
         variant = _perturbed_dsl(dsl, block_name, key, rule, indicator, deltas)
         variant["strategy_id"] = variant["strategy_id"] + "-perturb-" + "-".join(str(x) for x in deltas)
         try:
-            result = clients.run_backtest(variant, candles, starting_capital, benchmark)
+            result = clients.run_backtest(variant, {primary_tf: candles}, starting_capital, benchmark)
             sharpes.append(result.get("metrics", {}).get("Sharpe", 0))
         except Exception:
             continue

@@ -74,14 +74,25 @@ def compute_benchmark_return(candles: list) -> float:
     return (last - first) / first * 100
 
 
-def run_backtest(dsl: dict, candles: list, starting_capital: float = 100000, benchmark_return_pct: float = 0.0) -> dict:
-    r = _client.post(
-        f"{ENGINE_URL}/backtest",
-        json={
-            "strategy": dsl, "candles": candles, "starting_capital": starting_capital,
-            "benchmark_return_pct": benchmark_return_pct,
-        },
-    )
+def run_backtest(dsl: dict, candles_by_timeframe: dict, starting_capital: float = 100000, benchmark_return_pct: float = 0.0) -> dict:
+    """candles_by_timeframe maps timeframe string -> candle list, one entry
+    per timeframe the DSL's rules actually reference (see dsl_utils.
+    required_timeframes) — always at least the strategy's own declared
+    timeframe. The engine's /backtest wants the primary timeframe's candles
+    under "candles" (backward-compatible field) and any others under
+    "candles_by_timeframe" (see engine/internal/api/backtest.go)."""
+    primary_tf = dsl.get("timeframe", "1d")
+    primary_candles = candles_by_timeframe.get(primary_tf, [])
+    extra = {tf: c for tf, c in candles_by_timeframe.items() if tf != primary_tf}
+
+    payload = {
+        "strategy": dsl, "candles": primary_candles, "starting_capital": starting_capital,
+        "benchmark_return_pct": benchmark_return_pct,
+    }
+    if extra:
+        payload["candles_by_timeframe"] = extra
+
+    r = _client.post(f"{ENGINE_URL}/backtest", json=payload)
     r.raise_for_status()
     return r.json()
 
