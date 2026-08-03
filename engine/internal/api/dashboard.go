@@ -44,6 +44,12 @@ var intradaySnapshots = map[string][]byte{
 // same process's API.
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// The dashboard is a single embedded HTML/JS file rebuilt on every
+	// deploy — without an explicit no-store, browsers can keep serving a
+	// stale cached copy after a redeploy (no Last-Modified/ETag is sent,
+	// so heuristic caching kicks in), which looks exactly like "the
+	// deploy didn't take" even though the server is running the new code.
+	w.Header().Set("Cache-Control", "no-store")
 	w.Write(dashboardHTML)
 }
 
