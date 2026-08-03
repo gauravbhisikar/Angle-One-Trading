@@ -368,6 +368,7 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 
 type predictedMetricsRequest struct {
 	CAGR           float64 `json:"cagr"`
+	StrategyReturn float64 `json:"strategy_return"`
 	Sharpe         float64 `json:"sharpe"`
 	Sortino        float64 `json:"sortino"`
 	Drawdown       float64 `json:"drawdown"`
@@ -397,7 +398,7 @@ func (s *Server) handleSavePredictedMetrics(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	err = s.Predicted.Save(storage.PredictedMetrics{
-		StrategyID: id, CAGR: req.CAGR, Sharpe: req.Sharpe, Sortino: req.Sortino,
+		StrategyID: id, CAGR: req.CAGR, StrategyReturn: req.StrategyReturn, Sharpe: req.Sharpe, Sortino: req.Sortino,
 		Drawdown: req.Drawdown, WinRate: req.WinRate, ProfitFactor: req.ProfitFactor,
 		TotalTrades: req.TotalTrades, Source: req.Source,
 		Description: req.Description, Rationale: req.Rationale, ConfidenceJSON: req.ConfidenceJSON,

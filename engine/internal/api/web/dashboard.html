@@ -295,16 +295,28 @@ function renderSidebarStrategies() {
   ) || '<div class="sb-strat" style="cursor:default">none yet</div>';
 }
 
+// Every strategy runs its own isolated ₹100,000 (default) paper ledger —
+// there's no single shared pot. "Combined" here means the SUM across all
+// of them, as if each strategy were one position in one overall paper
+// portfolio: deploy 3 strategies at ₹100,000 each = ₹300,000 combined
+// capital, and combined P&L is the sum of what each one has made/lost so
+// far, live (refreshed every 5s, same as the rest of the dashboard).
 function portfolioSummary() {
   const el = document.getElementById('portfolio-summary');
   if (!strategiesCache.length) { el.innerHTML = ''; return; }
-  let totalPnl = 0, totalCapital = 0, running = 0;
-  strategiesCache.forEach(s => { totalPnl += parseFloat(s.pnl); totalCapital += parseFloat(s.starting_capital); if (s.status === 'running') running++; });
+  let totalPnl = 0, totalCapital = 0, running = 0, withPosition = 0;
+  strategiesCache.forEach(s => {
+    totalPnl += parseFloat(s.pnl); totalCapital += parseFloat(s.starting_capital);
+    if (s.status === 'running') running++;
+    if (s.open_positions > 0) withPosition++;
+  });
+  const currentValue = totalCapital + totalPnl;
   el.innerHTML =
-    '<div class="stat"><div class="label">Strategies</div><div class="value">' + strategiesCache.length + '</div></div>' +
-    '<div class="stat"><div class="label">Running</div><div class="value" style="color:var(--green)">' + running + '</div></div>' +
-    '<div class="stat"><div class="label">Total Capital Deployed</div><div class="value">' + fmtMoney(totalCapital) + '</div></div>' +
-    '<div class="stat"><div class="label">Total PnL</div><div class="value" style="color:' + (totalPnl>=0?'var(--green)':'var(--red)') + '">' + (totalPnl>=0?'+':'') + fmtMoney(totalPnl) + '</div></div>';
+    '<div class="stat"><div class="label">Strategies</div><div class="value">' + strategiesCache.length +
+      '</div><div style="font-size:11px;color:var(--muted)">' + running + ' running · ' + withPosition + ' in a position now</div></div>' +
+    '<div class="stat"><div class="label">Capital Deployed (combined)</div><div class="value">' + fmtMoney(totalCapital) + '</div></div>' +
+    '<div class="stat"><div class="label">Current Value (combined, live)</div><div class="value">' + fmtMoney(currentValue) + '</div></div>' +
+    '<div class="stat"><div class="label">Combined P&L (live)</div><div class="value" style="color:' + (totalPnl>=0?'var(--green)':'var(--red)') + '">' + (totalPnl>=0?'+':'') + fmtMoney(totalPnl) + '</div></div>';
 }
 
 function strategyCard(s, opts) {
@@ -432,18 +444,29 @@ async function openStrategyDetail(id) {
   const pnl = parseFloat(s.pnl);
   const livePrice = (priceResp && priceResp.known) ? parseFloat(priceResp.price) : null;
 
-  let positionHTML = '<div class="note">No open position right now.</div>';
+  // Explicitly distinguishes "never taken a position" from "closed one
+  // before, currently waiting for the next signal" — a bare "no open
+  // position" reads identically for both otherwise.
+  let positionHTML = '<div class="note">' +
+    (s.completed_trades > 0
+      ? 'No open position right now — has completed ' + s.completed_trades + ' trade' + (s.completed_trades>1?'s':'') + ', waiting for the next entry signal.'
+      : 'No position taken yet — waiting for the entry condition to fire.') +
+    '</div>';
   if (openTrade) {
     const entry = parseFloat(openTrade.EntryPrice);
-    let unrealizedHTML = '';
+    const qty = openTrade.Quantity;
+    const costBasis = entry * qty + parseFloat(openTrade.Costs || 0);
+    let liveHTML = '';
     if (livePrice != null) {
       const sign = openTrade.Direction === 'short' ? -1 : 1;
-      const unrealized = (livePrice - entry) * sign * openTrade.Quantity;
-      unrealizedHTML = ' · live price <b>' + fmtMoney(livePrice) + '</b> · unrealized ' +
-        '<b style="color:' + (unrealized>=0?'#3fb950':'#f85149') + '">' + (unrealized>=0?'+':'') + fmtMoney(unrealized) + '</b>';
+      const unrealized = (livePrice - entry) * sign * qty;
+      const currentValue = livePrice * qty;
+      const status = unrealized >= 0 ? 'PROFIT' : 'LOSS';
+      liveHTML = ' · live price <b>' + fmtMoney(livePrice) + '</b> · current value <b>' + fmtMoney(currentValue) + '</b>' +
+        ' · <b style="color:' + (unrealized>=0?'#3fb950':'#f85149') + '">' + status + ' ' + (unrealized>=0?'+':'') + fmtMoney(unrealized) + '</b>';
     }
     positionHTML = '<div class="note">Current position: <b>' + openTrade.Symbol + '</b> (' + (openTrade.Direction||'long') +
-      ') — entered at ' + fmtMoney(openTrade.EntryPrice) + ', qty ' + openTrade.Quantity + unrealizedHTML + '</div>';
+      ') — qty <b>' + qty + '</b>, entered at ' + fmtMoney(openTrade.EntryPrice) + ', cost basis <b>' + fmtMoney(costBasis) + '</b>' + liveHTML + '</div>';
   }
 
   detail.innerHTML =
@@ -465,7 +488,7 @@ async function openStrategyDetail(id) {
       (livePrice != null ? ' · ' + s.symbols[0] + ' live price <b style="color:var(--text)">' + fmtMoney(livePrice) + '</b>' : '') +
     '</div>' +
     positionHTML +
-    backtestVsLiveHTML(predicted, live, s.pnl) +
+    backtestVsLiveHTML(predicted, live, s.pnl, s.starting_capital) +
     '<canvas class="chart" id="detail-chart" width="900" height="220"></canvas>' +
     dailyReviewsHTML(dailyReviews) +
     '<div class="section-title">Recent Trades</div>' +
@@ -504,7 +527,7 @@ function dailyReviewsHTML(reviews) {
     ) + '</tbody></table>';
 }
 
-function backtestVsLiveHTML(predicted, live, livePnL) {
+function backtestVsLiveHTML(predicted, live, livePnL, startingCapital) {
   if (!predicted) {
     return '<div class="note">No backtest prediction recorded for this strategy (only strategies deployed from Strategy Lab get one).</div>';
   }
@@ -539,7 +562,11 @@ function backtestVsLiveHTML(predicted, live, livePnL) {
     '<div class="tourn-row header" style="grid-template-columns:1.4fr 1fr 1fr"><div>Metric</div><div>Backtest</div><div>Live so far</div></div>' +
     '<div class="tourn-row" style="grid-template-columns:1.4fr 1fr 1fr">' +
       '<div class="name">PnL (₹)</div>' +
-      '<div style="color:var(--muted)">not recorded</div>' +
+      '<div title="Estimated: starting capital × backtest total return — the backtest never traded real rupees">' +
+        (predicted.StrategyReturn != null
+          ? fmtMoney(parseFloat(startingCapital) * predicted.StrategyReturn / 100) + ' (est.)'
+          : '<span style="color:var(--muted)">not recorded</span>') +
+      '</div>' +
       '<div style="color:' + (parseFloat(livePnL)>=0?'#3fb950':'#f85149') + '">' + (livePnL!=null ? (parseFloat(livePnL)>=0?'+':'') + fmtMoney(livePnL) : '—') + '</div>' +
     '</div>' +
     rows.map(([label, pred, act, suffix]) =>
@@ -913,7 +940,7 @@ async function deploySelected() {
     if (sel.backtest && sel.backtest.metrics) {
       const m = sel.backtest.metrics;
       await api('POST', '/strategies/' + res.strategy_id + '/predicted-metrics', {
-        cagr: m.CAGR, sharpe: m.Sharpe, sortino: m.Sortino, drawdown: m.Drawdown,
+        cagr: m.CAGR, strategy_return: m.StrategyReturn, sharpe: m.Sharpe, sortino: m.Sortino, drawdown: m.Drawdown,
         win_rate: m.WinRate, profit_factor: m.ProfitFactor, total_trades: m.TotalTrades, source: 'agent',
         description: lab.result.description || '', rationale: lab.result.rationale || '',
         confidence_json: sel.confidence ? JSON.stringify(sel.confidence) : '',

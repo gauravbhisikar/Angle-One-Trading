@@ -144,6 +144,7 @@ var predictedMetricsExtraColumns = []string{
 	`ALTER TABLE predicted_metrics ADD COLUMN description TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE predicted_metrics ADD COLUMN rationale TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE predicted_metrics ADD COLUMN confidence_json TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE predicted_metrics ADD COLUMN strategy_return REAL NOT NULL DEFAULT 0`,
 }
 
 // strategiesExtraColumns adds first_run_at to strategies for databases
