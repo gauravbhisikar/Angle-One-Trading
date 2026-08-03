@@ -15,6 +15,7 @@ type DailyReview struct {
 	StrategyVersion int       `json:"strategy_version"`
 	Date            string    `json:"date"`
 	WinRate         float64   `json:"win_rate"`
+	ClosedTrades    int       `json:"closed_trades"`
 	OpenTrades      int       `json:"open_trades"`
 	PnL             string    `json:"pnl"`
 	Drawdown        float64   `json:"drawdown"`
@@ -37,7 +38,7 @@ func GenerateDailyReview(strategyID string, version int, date string, trades []m
 
 	return DailyReview{
 		StrategyID: strategyID, StrategyVersion: version, Date: date,
-		WinRate: m.WinRate, OpenTrades: openCount, PnL: totalPnL.String(),
+		WinRate: m.WinRate, ClosedTrades: m.TotalTrades, OpenTrades: openCount, PnL: totalPnL.String(),
 		Drawdown: m.Drawdown, Sharpe: m.Sharpe, ProfitFactor: m.ProfitFactor,
 		LargestWinner: m.LargestWinner, LargestLoser: m.LargestLoser,
 		AverageHoldDays: m.AverageHoldDays, MarketRegime: regime,

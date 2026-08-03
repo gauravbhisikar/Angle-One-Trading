@@ -18,6 +18,7 @@ import (
 
 	"tradingengine/internal/api"
 	"tradingengine/internal/config"
+	"tradingengine/internal/dailyreview"
 	"tradingengine/internal/evalcutoff"
 	"tradingengine/internal/execution"
 	"tradingengine/internal/featurestore"
@@ -133,6 +134,15 @@ func main() {
 	// the market-session cadence the other two monitors use.
 	retentionMonitor := retention.NewMonitor(eng, strategies, trades, orders, logs, startingCapital, 24*time.Hour)
 	go retentionMonitor.Run(ctx)
+
+	// Captures one real day-by-day performance snapshot per strategy per
+	// calendar day (upserted, so re-checking hourly just keeps today's row
+	// current as more trades close) — this is what actually populates the
+	// previously on-demand-only GET /strategies/{id}/daily-review/-reviews.
+	// Saved rows survive retention's raw-trade purge (a separate table),
+	// so day-by-day history outlives the raw trades it was computed from.
+	dailyReviewMonitor := dailyreview.NewMonitor(strategies, trades, reviews, startingCapital, time.Hour)
+	go dailyReviewMonitor.Run(ctx)
 
 	httpServer := &http.Server{Addr: cfg.APIAddr, Handler: server.Handler()}
 	go func() {

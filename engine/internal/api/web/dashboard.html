@@ -146,7 +146,7 @@
       <div class="page active" id="page-dashboard">
         <div class="stat-row" id="portfolio-summary"></div>
         <div id="dash-grid" class="grid"></div>
-        <div id="dash-empty" class="empty" style="display:none">No strategies yet. Use <b>Strategy Lab</b> to build one, or click below to preview with example data.<br><br><button class="btn primary" onclick="seedDemo()">Load demo data</button></div>
+        <div id="dash-empty" class="empty" style="display:none">No strategies yet. Use <b>Strategy Lab</b> to build one.</div>
       </div>
 
       <!-- STRATEGY LAB -->
@@ -156,7 +156,7 @@
 
       <!-- PAPER TRADING -->
       <div class="page" id="page-paper">
-        <div id="paper-list" class="grid"></div>
+        <div id="paper-list"></div>
         <div id="paper-empty" class="empty" style="display:none">No strategies running yet.</div>
         <div id="paper-detail"></div>
       </div>
@@ -353,15 +353,30 @@ function renderDashboard() {
   grid.innerHTML = safeMap(strategiesCache, s => strategyCard(s));
 }
 
-async function seedDemo() {
-  try { await api('POST', '/dev/seed'); await refreshStrategies(); } catch (e) { alert('seed failed: ' + e.message); }
+/* ---------- PAPER TRADING page ---------- */
+// Grouped by current state rather than one flat list — "what's live vs
+// paused vs stopped" is the first question when there are more than a
+// couple of strategies, and a flat grid buries the answer in badge colors.
+const PAPER_GROUPS = [
+  { key: 'running', label: 'Live' },
+  { key: 'paused', label: 'Paused' },
+  { key: 'other', label: 'Stopped / Not Started' },
+];
+
+function paperGroupOf(s) {
+  return (s.status === 'running' || s.status === 'paused') ? s.status : 'other';
 }
 
-/* ---------- PAPER TRADING page ---------- */
 function renderPaper() {
   const list = document.getElementById('paper-list');
   document.getElementById('paper-empty').style.display = strategiesCache.length ? 'none' : 'block';
-  list.innerHTML = safeMap(strategiesCache, s => strategyCard(s, {onclick: "openStrategyDetail('" + s.strategy_id + "')"}));
+  const cardOpts = s => ({onclick: "openStrategyDetail('" + s.strategy_id + "')"});
+  list.innerHTML = PAPER_GROUPS.map(g => {
+    const items = strategiesCache.filter(s => paperGroupOf(s) === g.key);
+    if (!items.length) return '';
+    return '<div class="section-title" style="margin-top:16px">' + g.label + ' (' + items.length + ')</div>' +
+      '<div class="grid">' + safeMap(items, s => strategyCard(s, cardOpts(s))) + '</div>';
+  }).join('');
 }
 
 async function strategyAction(id, act) {
@@ -403,13 +418,14 @@ async function openStrategyDetail(id) {
   const detail = document.getElementById('paper-detail');
   detail.innerHTML = '<div class="card" style="margin-top:16px">Loading…</div>';
 
-  const [curve, trades, logs, live, predicted, priceResp] = await Promise.all([
+  const [curve, trades, logs, live, predicted, priceResp, dailyReviews] = await Promise.all([
     api('GET', '/strategies/' + id + '/equity-curve').catch(()=>[]),
     api('GET', '/strategies/' + id + '/trades').catch(()=>[]),
     api('GET', '/strategies/' + id + '/logs').catch(()=>[]),
     api('GET', '/strategies/' + id + '/analytics').catch(()=>null),
     api('GET', '/strategies/' + id + '/predicted-metrics').catch(()=>null),
     api('GET', '/market/price/' + encodeURIComponent(s.symbols[0])).catch(()=>null),
+    api('GET', '/strategies/' + id + '/daily-reviews').catch(()=>[]),
   ]);
 
   const openTrade = (trades||[]).slice().reverse().find(t => t.State === 'ACTIVE' || t.State === 'OPEN');
@@ -451,6 +467,7 @@ async function openStrategyDetail(id) {
     positionHTML +
     backtestVsLiveHTML(predicted, live, s.pnl) +
     '<canvas class="chart" id="detail-chart" width="900" height="220"></canvas>' +
+    dailyReviewsHTML(dailyReviews) +
     '<div class="section-title">Recent Trades</div>' +
     '<table><thead><tr><th>Symbol</th><th>Entry</th><th>Exit</th><th>Qty</th><th>PnL</th><th>State</th><th>Reason</th></tr></thead><tbody>' +
     (trades||[]).slice().reverse().slice(0,30).map(t =>
@@ -463,6 +480,28 @@ async function openStrategyDetail(id) {
     '</div>';
 
   drawEquityChart(document.getElementById('detail-chart'), curve);
+}
+
+// Day-by-day performance from first run until now (or until it was
+// stopped / auto-paused by evalcutoff) — one real row per day it had at
+// least one closed trade or an open position, captured automatically by
+// internal/dailyreview.Monitor. Survives internal/retention's raw-trade
+// purge (a separate table), so this history outlives the trades it was
+// computed from.
+function dailyReviewsHTML(reviews) {
+  if (!reviews || !reviews.length) {
+    return '<div class="section-title" style="margin-top:16px">Day-by-Day Performance</div>' +
+      '<div class="note">No daily snapshots yet — captured automatically once this strategy has a closed trade or open position on a given day.</div>';
+  }
+  const rows = reviews.slice().reverse(); // newest first
+  return '<div class="section-title" style="margin-top:16px">Day-by-Day Performance</div>' +
+    '<table><thead><tr><th>Date</th><th>PnL</th><th>Closed</th><th>Open</th><th>Win Rate</th><th>Profit Factor</th></tr></thead><tbody>' +
+    safeMap(rows, r =>
+      '<tr><td>' + r.date + '</td>' +
+      '<td style="color:' + (parseFloat(r.pnl)>=0?'#3fb950':'#f85149') + '">' + (parseFloat(r.pnl)>=0?'+':'') + fmtMoney(r.pnl) + '</td>' +
+      '<td>' + r.closed_trades + '</td><td>' + r.open_trades + '</td>' +
+      '<td>' + r.win_rate.toFixed(1) + '%</td><td>' + r.profit_factor.toFixed(2) + '</td></tr>'
+    ) + '</tbody></table>';
 }
 
 function backtestVsLiveHTML(predicted, live, livePnL) {

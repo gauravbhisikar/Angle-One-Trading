@@ -28,6 +28,34 @@ func (r *ReviewRepo) GetDailyReview(strategyID string, version int, date string)
 	return out, err
 }
 
+// DailyReviewRow is one saved day's snapshot, oldest first — the
+// day-by-day performance history a strategy accumulates from first run
+// until stopped (or auto-paused by evalcutoff), not just a live-now total.
+type DailyReviewRow struct {
+	Date string
+	JSON string
+}
+
+func (r *ReviewRepo) ListDailyReviews(strategyID string, version int) ([]DailyReviewRow, error) {
+	rows, err := r.db.Query(
+		`SELECT review_date, json FROM daily_reviews WHERE strategy_id = ? AND strategy_version = ? ORDER BY review_date`,
+		strategyID, version,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DailyReviewRow
+	for rows.Next() {
+		var d DailyReviewRow
+		if err := rows.Scan(&d.Date, &d.JSON); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 func (r *ReviewRepo) SaveAIReview(strategyID string, version int, from, to, json string) error {
 	_, err := r.db.Exec(
 		`INSERT INTO ai_reviews (strategy_id, strategy_version, period_from, period_to, json, created_at)

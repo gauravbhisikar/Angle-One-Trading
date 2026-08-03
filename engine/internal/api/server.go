@@ -78,7 +78,6 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /system/logs", s.handleSystemLogs)
 	s.mux.HandleFunc("GET /strategies", s.handleListStrategies)
 	s.mux.HandleFunc("GET /strategies/{id}/equity-curve", s.handleEquityCurve)
-	s.mux.HandleFunc("POST /dev/seed", s.handleSeedDemo)
 	s.mux.HandleFunc("POST /backtest", s.handleBacktest)
 	s.mux.HandleFunc("POST /features/compute", s.handleFeaturesCompute)
 	s.mux.HandleFunc("GET /features/{symbol}", s.handleFeaturesQuery)
@@ -97,6 +96,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /strategies/{id}/predicted-metrics", s.handleSavePredictedMetrics)
 	s.mux.HandleFunc("GET /strategies/{id}/predicted-metrics", s.handleGetPredictedMetrics)
 	s.mux.HandleFunc("GET /strategies/{id}/daily-review", s.handleDailyReview)
+	s.mux.HandleFunc("GET /strategies/{id}/daily-reviews", s.handleListDailyReviews)
 	s.mux.HandleFunc("GET /strategies/{id}/logs", s.handleLogs)
 }
 
@@ -432,21 +432,47 @@ func (s *Server) handleDailyReview(w http.ResponseWriter, r *http.Request) {
 	if date == "" {
 		date = time.Now().UTC().Format("2006-01-02")
 	}
-	trades, err := s.Trades.ListByStrategy(strat.StrategyID, strat.StrategyVersion)
+	allTrades, err := s.Trades.ListByStrategy(strat.StrategyID, strat.StrategyVersion)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// Only trades that EXITED on this date count toward its stats — a
+	// daily review reporting the strategy's entire lifetime win rate on
+	// every date would defeat the whole point of "how did it do that day."
+	dayTrades := make([]models.Trade, 0, len(allTrades))
 	openCount := 0
-	for _, t := range trades {
-		if t.State == models.TradeActive {
+	for _, t := range allTrades {
+		if t.State == models.TradeActive || t.State == models.TradeOpen {
 			openCount++
+			continue
+		}
+		if !t.ExitTime.IsZero() && t.ExitTime.UTC().Format("2006-01-02") == date {
+			dayTrades = append(dayTrades, t)
 		}
 	}
-	review := analytics.GenerateDailyReview(strat.StrategyID, strat.StrategyVersion, date, trades, openCount, s.DefaultStartingCapital, 0, "")
+	review := analytics.GenerateDailyReview(strat.StrategyID, strat.StrategyVersion, date, dayTrades, openCount, s.DefaultStartingCapital, 0, "")
 	raw, _ := json.Marshal(review)
 	_ = s.Reviews.SaveDailyReview(strat.StrategyID, strat.StrategyVersion, date, string(raw))
 	writeJSON(w, http.StatusOK, review)
+}
+
+func (s *Server) handleListDailyReviews(w http.ResponseWriter, r *http.Request) {
+	strat, _, err := s.Strategies.GetLatestVersion(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "strategy not found")
+		return
+	}
+	rows, err := s.Reviews.ListDailyReviews(strat.StrategyID, strat.StrategyVersion)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]json.RawMessage, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, json.RawMessage(row.JSON))
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
