@@ -107,8 +107,17 @@ func Compute(trades []models.Trade, startingCapital decimal.Decimal, benchmarkRe
 	m.StrategyReturn = (equity - startingCapital.InexactFloat64()) / startingCapital.InexactFloat64() * 100
 	m.TotalTrades = total
 
+	// Annualizing anything under a full day is nonsensical — raising a
+	// near-1.0 ratio to a huge power (1/years, e.g. ~24000 for a 22-minute
+	// intraday trade) drives the result toward 0 regardless of how small
+	// the real loss was, reporting CAGR near -100% for a trade that lost
+	// a few rupees. Below one day of elapsed holding period, CAGR simply
+	// isn't a meaningful number yet — leave it at its zero value (the UI
+	// already renders 0 sensibly for intraday's early trades) rather than
+	// let the exponent explode.
+	const minCAGRYears = 1.0 / 365.25
 	years := lastExit.Sub(firstEntry).Hours() / 24 / 365.25
-	if years > 0 && capitalF > 0 && equity > 0 {
+	if years >= minCAGRYears && capitalF > 0 && equity > 0 {
 		m.CAGR = (math.Pow(equity/capitalF, 1/years) - 1) * 100
 	}
 

@@ -38,6 +38,13 @@ type Config struct {
 	FeatureStore *featurestore.Store
 
 	DefaultStartingCapital decimal.Decimal
+
+	// PriceLookup is the exact same last-candle-close lookup the paper
+	// broker fills orders against (see cmd/engine/main.go) — surfaced
+	// here too so the dashboard can show a real "live price" for an open
+	// position instead of just the entry price, without a second,
+	// possibly-inconsistent price source.
+	PriceLookup func(symbol string) (decimal.Decimal, bool)
 }
 
 type Server struct {
@@ -67,6 +74,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /backtest/sample-data", s.handleSampleHistory)
 	s.mux.HandleFunc("GET /backtest/sample-data-intraday", s.handleSampleIntradayHistory)
 	s.mux.HandleFunc("GET /market/status", s.handleMarketStatus)
+	s.mux.HandleFunc("GET /market/price/{symbol}", s.handleMarketPrice)
 	s.mux.HandleFunc("GET /system/logs", s.handleSystemLogs)
 	s.mux.HandleFunc("GET /strategies", s.handleListStrategies)
 	s.mux.HandleFunc("GET /strategies/{id}/equity-curve", s.handleEquityCurve)

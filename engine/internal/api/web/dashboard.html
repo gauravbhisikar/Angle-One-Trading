@@ -378,16 +378,32 @@ async function openStrategyDetail(id) {
   const detail = document.getElementById('paper-detail');
   detail.innerHTML = '<div class="card" style="margin-top:16px">Loading…</div>';
 
-  const [curve, trades, logs, live, predicted] = await Promise.all([
+  const [curve, trades, logs, live, predicted, priceResp] = await Promise.all([
     api('GET', '/strategies/' + id + '/equity-curve').catch(()=>[]),
     api('GET', '/strategies/' + id + '/trades').catch(()=>[]),
     api('GET', '/strategies/' + id + '/logs').catch(()=>[]),
     api('GET', '/strategies/' + id + '/analytics').catch(()=>null),
     api('GET', '/strategies/' + id + '/predicted-metrics').catch(()=>null),
+    api('GET', '/market/price/' + encodeURIComponent(s.symbols[0])).catch(()=>null),
   ]);
 
   const openTrade = (trades||[]).slice().reverse().find(t => t.State === 'ACTIVE' || t.State === 'OPEN');
   const pnl = parseFloat(s.pnl);
+  const livePrice = (priceResp && priceResp.known) ? parseFloat(priceResp.price) : null;
+
+  let positionHTML = '<div class="note">No open position right now.</div>';
+  if (openTrade) {
+    const entry = parseFloat(openTrade.EntryPrice);
+    let unrealizedHTML = '';
+    if (livePrice != null) {
+      const sign = openTrade.Direction === 'short' ? -1 : 1;
+      const unrealized = (livePrice - entry) * sign * openTrade.Quantity;
+      unrealizedHTML = ' · live price <b>' + fmtMoney(livePrice) + '</b> · unrealized ' +
+        '<b style="color:' + (unrealized>=0?'#3fb950':'#f85149') + '">' + (unrealized>=0?'+':'') + fmtMoney(unrealized) + '</b>';
+    }
+    positionHTML = '<div class="note">Current position: <b>' + openTrade.Symbol + '</b> (' + (openTrade.Direction||'long') +
+      ') — entered at ' + fmtMoney(openTrade.EntryPrice) + ', qty ' + openTrade.Quantity + unrealizedHTML + '</div>';
+  }
 
   detail.innerHTML =
     '<div class="card" style="margin-top:16px">' +
@@ -403,11 +419,12 @@ async function openStrategyDetail(id) {
       '</div>' +
     '</div>' +
     '<div class="pnl ' + (pnl>=0?'pos':'neg') + '" style="margin-top:10px">' + (pnl>=0?'+':'') + fmtMoney(pnl) + '</div>' +
-    (openTrade ? (
-      '<div class="note">Current position: <b>' + openTrade.Symbol + '</b> — entered at ' + fmtMoney(openTrade.EntryPrice) +
-      ', qty ' + openTrade.Quantity + '</div>'
-    ) : '<div class="note">No open position right now.</div>') +
-    backtestVsLiveHTML(predicted, live) +
+    '<div style="font-size:12px;color:var(--muted);margin-top:2px">Starting capital <b style="color:var(--text)">' + fmtMoney(s.starting_capital) +
+      '</b> · Cash remaining <b style="color:var(--text)">' + fmtMoney(s.cash) + '</b>' +
+      (livePrice != null ? ' · ' + s.symbols[0] + ' live price <b style="color:var(--text)">' + fmtMoney(livePrice) + '</b>' : '') +
+    '</div>' +
+    positionHTML +
+    backtestVsLiveHTML(predicted, live, s.pnl) +
     '<canvas class="chart" id="detail-chart" width="900" height="220"></canvas>' +
     '<div class="section-title">Recent Trades</div>' +
     '<table><thead><tr><th>Symbol</th><th>Entry</th><th>Exit</th><th>Qty</th><th>PnL</th><th>State</th><th>Reason</th></tr></thead><tbody>' +
@@ -423,7 +440,7 @@ async function openStrategyDetail(id) {
   drawEquityChart(document.getElementById('detail-chart'), curve);
 }
 
-function backtestVsLiveHTML(predicted, live) {
+function backtestVsLiveHTML(predicted, live, livePnL) {
   if (!predicted) {
     return '<div class="note">No backtest prediction recorded for this strategy (only strategies deployed from Strategy Lab get one).</div>';
   }
@@ -456,6 +473,11 @@ function backtestVsLiveHTML(predicted, live) {
     '<div class="section-title" style="margin-top:16px">Backtest (predicted) vs Live (actual)</div>' +
     '<div class="card">' +
     '<div class="tourn-row header" style="grid-template-columns:1.4fr 1fr 1fr"><div>Metric</div><div>Backtest</div><div>Live so far</div></div>' +
+    '<div class="tourn-row" style="grid-template-columns:1.4fr 1fr 1fr">' +
+      '<div class="name">PnL (₹)</div>' +
+      '<div style="color:var(--muted)">not recorded</div>' +
+      '<div style="color:' + (parseFloat(livePnL)>=0?'#3fb950':'#f85149') + '">' + (livePnL!=null ? (parseFloat(livePnL)>=0?'+':'') + fmtMoney(livePnL) : '—') + '</div>' +
+    '</div>' +
     rows.map(([label, pred, act, suffix]) =>
       '<div class="tourn-row" style="grid-template-columns:1.4fr 1fr 1fr">' +
       '<div class="name">' + label + '</div>' +

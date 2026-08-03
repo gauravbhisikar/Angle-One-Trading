@@ -104,6 +104,7 @@ func main() {
 		Broker:                 broker,
 		FeatureStore:           featureStore,
 		DefaultStartingCapital: startingCapital,
+		PriceLookup:            priceLookup,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
