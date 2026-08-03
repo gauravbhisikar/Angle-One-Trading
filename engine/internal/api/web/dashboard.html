@@ -303,16 +303,22 @@ function renderSidebarStrategies() {
 // far, live (refreshed every 5s, same as the rest of the dashboard).
 function portfolioSummary() {
   const el = document.getElementById('portfolio-summary');
-  if (!strategiesCache.length) { el.innerHTML = ''; return; }
+  // Experiments (deployed despite failing quality gates, see
+  // renderLabResult's "Run as Research Experiment") never count toward
+  // the combined portfolio the agent actually stands behind — mixing
+  // them in would let a known-bad strategy silently drag down (or, if
+  // lucky, inflate) the number a real deployment decision would read.
+  const real = strategiesCache.filter(s => !s.is_experiment);
+  if (!real.length) { el.innerHTML = ''; return; }
   let totalPnl = 0, totalCapital = 0, running = 0, withPosition = 0;
-  strategiesCache.forEach(s => {
+  real.forEach(s => {
     totalPnl += parseFloat(s.pnl); totalCapital += parseFloat(s.starting_capital);
     if (s.status === 'running') running++;
     if (s.open_positions > 0) withPosition++;
   });
   const currentValue = totalCapital + totalPnl;
   el.innerHTML =
-    '<div class="stat"><div class="label">Strategies</div><div class="value">' + strategiesCache.length +
+    '<div class="stat"><div class="label">Strategies</div><div class="value">' + real.length +
       '</div><div style="font-size:11px;color:var(--muted)">' + running + ' running · ' + withPosition + ' in a position now</div></div>' +
     '<div class="stat"><div class="label">Capital Deployed (combined)</div><div class="value">' + fmtMoney(totalCapital) + '</div></div>' +
     '<div class="stat"><div class="label">Current Value (combined, live)</div><div class="value">' + fmtMoney(currentValue) + '</div></div>' +
@@ -329,6 +335,7 @@ function strategyCard(s, opts) {
       '<button style="font-size:11px;color:var(--muted)" onclick="event.stopPropagation();removeStrategy(\'' + s.strategy_id + '\',\'' + s.strategy_name.replace(/'/g,"\\'") + '\')" title="Remove strategy">✕</button>' +
     '</div>' +
     '<div class="badges"><span class="badge ' + s.status + '">' + s.status.replace('_',' ') + '</span><span class="badge">' + s.type + '</span>' +
+      (s.is_experiment ? '<span class="badge" style="color:var(--red);border-color:var(--red)" title="Deployed despite failing quality gates in the tournament — never a recommendation, an explicit opt-in exploratory paper trade">EXPERIMENTAL</span>' : '') +
       (s.data_purged ? '<span class="badge" title="Raw trades/orders/logs reclaimed after 90 idle days — strategy definition and analysis are intact, redeploy to re-run">data purged</span>' : '') +
     '</div>' +
     '<div class="pnl ' + (pnl>=0?'pos':'neg') + '">' + (pnl>=0?'+':'') + fmtMoney(pnl) + ' <span style="font-size:12px">(' + pnlPct.toFixed(2) + '%)</span></div>' +
@@ -361,21 +368,27 @@ function evalProgressHTML(s) {
 function renderDashboard() {
   portfolioSummary();
   const grid = document.getElementById('dash-grid');
-  document.getElementById('dash-empty').style.display = strategiesCache.length ? 'none' : 'block';
-  grid.innerHTML = safeMap(strategiesCache, s => strategyCard(s));
+  const real = strategiesCache.filter(s => !s.is_experiment);
+  document.getElementById('dash-empty').style.display = real.length ? 'none' : 'block';
+  grid.innerHTML = safeMap(real, s => strategyCard(s));
 }
 
 /* ---------- PAPER TRADING page ---------- */
 // Grouped by current state rather than one flat list — "what's live vs
 // paused vs stopped" is the first question when there are more than a
 // couple of strategies, and a flat grid buries the answer in badge colors.
+// Experiments (failed quality gates, deployed anyway — see
+// renderLabResult) get their own group regardless of run state, so they
+// never sit alongside strategies the agent actually recommended.
 const PAPER_GROUPS = [
+  { key: 'experiment', label: 'Research Experiments (failed backtest gates)' },
   { key: 'running', label: 'Live' },
   { key: 'paused', label: 'Paused' },
   { key: 'other', label: 'Stopped / Not Started' },
 ];
 
 function paperGroupOf(s) {
+  if (s.is_experiment) return 'experiment';
   return (s.status === 'running' || s.status === 'paused') ? s.status : 'other';
 }
 
@@ -880,6 +893,7 @@ function renderLabResult(root) {
         '</div><div class="expand-panel" id="expand-' + i + '" style="display:none">' +
           '<b>Hypothesis (before backtest):</b> ' + c.rationale +
           (c.gate_reasons && c.gate_reasons.length ? '<br><span style="color:var(--red)">Rejected: ' + c.gate_reasons.join(', ') + '</span>' : '') +
+          (!isSel && !c.gate_passed && c.dsl ? '<br><button style="margin-top:8px;color:var(--red);border-color:var(--red)" onclick="event.stopPropagation();deployExperiment(' + i + ')">🧪 Run as Research Experiment (failed gates)</button>' : '') +
         '</div>';
       }).join('') + '</div>';
   }
@@ -928,6 +942,29 @@ function renderLabResult(root) {
 function toggleExpand(i) {
   const el = document.getElementById('expand-' + i);
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+// Deploys a candidate that FAILED quality gates anyway, as an explicitly
+// labeled research experiment — never routed through the normal
+// selected/recommended path, and tagged so the dashboard keeps it out of
+// combined portfolio totals and its own section (see IsExperiment /
+// dashboard_data.go, paperGroupOf). Uses the same agent /deploy endpoint
+// as a real deploy so deployment-memory bookkeeping stays consistent —
+// only the injected "experiment" tag differs.
+async function deployExperiment(i) {
+  const c = lab.result.ranked[i];
+  if (!c || !c.dsl) return;
+  const reasons = (c.gate_reasons || []).join(', ') || 'unknown';
+  if (!confirm('"' + c.name + '" FAILED quality gates (' + reasons + ') — the agent does NOT recommend this. ' +
+    'Deploy it anyway as a labeled research experiment in paper trading?')) return;
+  const dsl = Object.assign({}, c.dsl, {tags: [...(c.dsl.tags || []), 'experiment']});
+  try {
+    const res = await agentApi('POST', '/deploy', {dsl});
+    await refreshStrategies();
+    alert('Deployed as a Research Experiment: ' + res.strategy_id + '. See Paper Trading → Research Experiments.');
+  } catch (e) {
+    alert('Deploy failed: ' + e.message);
+  }
 }
 
 async function deploySelected() {

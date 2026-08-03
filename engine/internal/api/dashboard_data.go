@@ -43,6 +43,25 @@ type StrategySummary struct {
 	// either way, which would otherwise look identical to a strategy that
 	// simply never ran.
 	DataPurged bool `json:"data_purged"`
+
+	// IsExperiment marks a strategy deployed from a candidate that FAILED
+	// quality gates (nodes/rank.py) — the user explicitly chose to paper-
+	// trade it anyway despite the agent never recommending it. Driven by
+	// the DSL's own tags field ("experiment"), not a separate table, so
+	// it survives exactly like any other strategy (versioning, purge,
+	// etc.) — just flagged for the dashboard to keep it out of combined
+	// portfolio totals and its own section, never mixed with strategies
+	// the agent actually recommended.
+	IsExperiment bool `json:"is_experiment"`
+}
+
+func hasExperimentTag(tags []string) bool {
+	for _, t := range tags {
+		if t == "experiment" {
+			return true
+		}
+	}
+	return false
 }
 
 // handleListStrategies is the dashboard's single overview call: every
@@ -118,7 +137,7 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			StartingCapital: s.DefaultStartingCapital.String(), Cash: cash.String(), PnL: pnl,
 			WinRate: winRate, ProfitFactor: profitFactor, CompletedTrades: completed,
 			EvalProgress: evalProgress, EvalLimit: evalLimit, EvalCutoffReached: evalReached,
-			DataPurged: dataPurged,
+			DataPurged: dataPurged, IsExperiment: hasExperimentTag(strat.Tags),
 		})
 	}
 
