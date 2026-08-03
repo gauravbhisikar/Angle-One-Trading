@@ -26,11 +26,18 @@ class AgentState(TypedDict, total=False):
     # gather_context
     decision_context: dict
 
-    # plan
-    plan: dict           # {candidates: [{name, archetype, rationale}], research_needed, research_queries}
+    # plan — swing: {candidates: [{archetype, risk, holding_days, rationale}], research_needed, research_queries}
+    # intraday: DimensionSelectionPlan shape (nodes/schemas.py) — trend_filters/
+    # entry_triggers/confirmations/exit_styles/risk_tiers, research_needed, research_queries
+    plan: dict
 
     # research (optional)
     research_findings: list
+
+    # expand_node / quick_filter_node — intraday only (nodes/combinatorics.py,
+    # nodes/quick_filter.py); swing never populates these
+    raw_specs: list[dict]        # expand_grid's cartesian product, pre-filter
+    candidate_specs: list[dict]  # quick_filter's survivors, what generate_dsl consumes
 
     # generate_dsl / validate loop
     candidates: list[Candidate]

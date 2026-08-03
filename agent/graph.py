@@ -3,7 +3,9 @@ from langgraph.graph import StateGraph, START, END
 from state import AgentState
 from nodes.gather_context import gather_context
 from nodes.plan import plan
-from nodes.research import research, should_research
+from nodes.research import research
+from nodes.combinatorics import expand_node
+from nodes.quick_filter import quick_filter_node
 from nodes.generate_dsl import generate_dsl
 from nodes.validate import validate
 from nodes.backtest import backtest
@@ -14,12 +16,24 @@ from nodes.self_review import self_review
 from nodes.memory_update import memory_update
 
 
+def _route_after_plan(state: AgentState) -> str:
+    if state["plan"].get("research_needed"):
+        return "research"
+    return "expand" if state["style"] == "intraday" else "direct"
+
+
+def _route_after_research(state: AgentState) -> str:
+    return "expand" if state["style"] == "intraday" else "direct"
+
+
 def build_graph():
     g = StateGraph(AgentState)
 
     g.add_node("gather_context", gather_context)
     g.add_node("plan_node", plan)
     g.add_node("research_node", research)
+    g.add_node("expand_node", expand_node)
+    g.add_node("quick_filter_node", quick_filter_node)
     g.add_node("generate_dsl", generate_dsl)
     g.add_node("validate", validate)
     g.add_node("backtest", backtest)
@@ -31,8 +45,15 @@ def build_graph():
 
     g.add_edge(START, "gather_context")
     g.add_edge("gather_context", "plan_node")
-    g.add_conditional_edges("plan_node", should_research, {"research": "research_node", "generate_dsl": "generate_dsl"})
-    g.add_edge("research_node", "generate_dsl")
+    # Swing keeps its original fixed-archetype path straight to
+    # generate_dsl; intraday routes through expand_node/quick_filter_node
+    # first (nodes/combinatorics.py, nodes/quick_filter.py) to turn
+    # plan_node's small DimensionSelectionPlan into dozens of real
+    # candidates before generate_dsl builds DSL for each one.
+    g.add_conditional_edges("plan_node", _route_after_plan, {"research": "research_node", "expand": "expand_node", "direct": "generate_dsl"})
+    g.add_conditional_edges("research_node", _route_after_research, {"expand": "expand_node", "direct": "generate_dsl"})
+    g.add_edge("expand_node", "quick_filter_node")
+    g.add_edge("quick_filter_node", "generate_dsl")
     g.add_edge("generate_dsl", "validate")
     g.add_edge("validate", "backtest")
     g.add_edge("backtest", "rank")

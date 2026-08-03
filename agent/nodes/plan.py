@@ -1,6 +1,7 @@
 from state import AgentState
 from llm import get_llm, invoke_structured
-from nodes.schemas import Plan, CandidatePlan, IntradayPlan, IntradayCandidatePlan, ARCHETYPES, INTRADAY_ARCHETYPES
+from nodes.schemas import Plan, CandidatePlan, ARCHETYPES, DimensionSelectionPlan
+from nodes.dimensions import TREND_FILTER_NAMES, ENTRY_TRIGGER_NAMES, CONFIRMATION_NAMES, EXIT_STYLE_NAMES
 from nodes.lesson_keys import lesson_key
 from context_glossary import CONTEXT_GLOSSARY
 
@@ -95,10 +96,91 @@ def _fallback_plan(archetype_list: list, avoid: list, already_tried: set, risk: 
     }
 
 
+def _fallback_dimension_selection() -> dict:
+    """Deterministic dimension selection used when no LLM key is
+    configured (or the call fails) — spans all 4 entry-trigger style
+    buckets (mean_reversion, breakout, trend_follow) so the fallback
+    tournament still has real diversity, not just proof the graph wires
+    correctly. quick_filter.py cartesian-expands this into ~40+
+    candidates the same way a real LLM selection would."""
+    return {
+        "trend_filters": ["none", "ema_cross_20_50"],
+        "entry_triggers": ["rsi_pullback_32", "donchian_breakout_up", "macd_bullish_cross", "vwap_reversion_cross"],
+        "confirmations": ["none", "volume_spike_150"],
+        "exit_styles": ["tp_sl_only", "supertrend_flip"],
+        "risk_tiers": ["moderate"],
+        "regime_rationale": "template fallback — no LLM configured",
+        "research_needed": False,
+        "research_queries": [],
+    }
+
+
+INTRADAY_DIMENSION_SYSTEM_PROMPT = """You are a quant strategy researcher for an Indian NIFTYBEES ETF intraday
+paper-trading system. You do not write trading logic or invent indicators — you pick which VALUES on each of 4
+axes (trend filter, entry trigger, confirmation, exit style) plus which risk tiers are worth trying today.
+Downstream code cartesian-expands your selection into dozens of individually parameterized candidates and
+backtests all of them in a real tournament — you never see or produce a candidate count, just axis values.
+
+Pick a genuinely diverse set on each axis, not just what you think is "best" — several distinct angles worth
+comparing (mean-reversion vs breakout vs trend-follow entries; more than one exit style; more than one risk tier
+only if the regime is genuinely ambiguous). 'none' is always a valid trend_filter/confirmation/exit_style choice
+— never force a filter or confirmation with no real basis in today's context just to fill the list.
+
+Note: unlike the swing path, there is no per-axis-value avoid-list yet — memory/lessons for intraday are recorded
+per exact combination (see nodes/combinatorics.py's spec_archetype_key), not per individual axis value, since a
+trigger that fails paired with one trend filter might work paired with another. The hard memory guard still
+applies post-hoc to whichever exact combination gets selected (nodes/guardrails.py) — this system prompt just
+can't warn you away from a specific axis value in advance the way the swing/named-archetype path can.
+
+Research principles to actually apply, not just recite — every axis choice should reflect these:
+1. Never justify a pick by CAGR/return alone — risk-adjusted (Sharpe, drawdown) matters more than raw return.
+2. Prefer robustness over peak backtest performance — a combination that's merely OK across conditions beats one
+   that's spectacular in one narrow case.
+3. State which specific piece of the given context (trend, breadth, VIX, FII/DII, sentiment, overnight, regime)
+   actually supports these particular axis choices — a rationale with no real data point behind it is a guess,
+   say so if that's genuinely all you have.
+4. If nothing in the current regime clearly favors one axis value over another, say that plainly in
+   regime_rationale instead of inventing a story.
+
+""" + CONTEXT_GLOSSARY
+
+
+def _plan_intraday(state: AgentState) -> dict:
+    llm = get_llm()
+    if llm is None:
+        return {"plan": _fallback_dimension_selection(), "llm_used": False}
+
+    is_retry = state.get("retry_count", 0) > 0
+    retry_note = (
+        f"\n\nThis is retry attempt #{state['retry_count']+1} — every candidate from the previous round(s) "
+        f"failed quality gates or a guardrail check ({state.get('guardrail_reasons') or 'see rejection reasons'}). "
+        "Pick a genuinely different set of axis values this time, not the same selection again."
+        if is_retry else ""
+    )
+    user_msg = (
+        f"Market/portfolio/memory context:\n{state['decision_context']}\n\n"
+        f"Axis menu (only choose from these):\n"
+        f"trend_filters: {TREND_FILTER_NAMES}\n"
+        f"entry_triggers: {ENTRY_TRIGGER_NAMES}\n"
+        f"confirmations: {CONFIRMATION_NAMES}\n"
+        f"exit_styles: {EXIT_STYLE_NAMES}"
+        f"{retry_note}"
+    )
+    result = invoke_structured(llm, DimensionSelectionPlan, [("system", INTRADAY_DIMENSION_SYSTEM_PROMPT), ("user", user_msg)])
+    if result is None:
+        return {
+            "plan": _fallback_dimension_selection(), "llm_used": False,
+            "errors": state.get("errors", []) + ["plan: LLM output failed to parse after retries, used deterministic fallback"],
+        }
+    return {"plan": result.model_dump(), "llm_used": True}
+
+
 def plan(state: AgentState) -> dict:
     style = state["style"]
-    archetype_list = INTRADAY_ARCHETYPES if style == "intraday" else ARCHETYPES
-    schema = IntradayPlan if style == "intraday" else Plan
+    if style == "intraday":
+        return _plan_intraday(state)
+
+    archetype_list = ARCHETYPES
     avoid = _avoid_archetypes(state, archetype_list, style)
     already_tried = {c.get("archetype") for c in state.get("candidates", [])}
     is_retry = state.get("retry_count", 0) > 0
@@ -106,9 +188,8 @@ def plan(state: AgentState) -> dict:
     llm = get_llm()
     if llm is None:
         plan_dict = _fallback_plan(archetype_list, avoid, already_tried)
-        if style != "intraday":
-            for c in plan_dict["candidates"]:
-                c["holding_days"] = 20
+        for c in plan_dict["candidates"]:
+            c["holding_days"] = 20
         return {"plan": plan_dict, "llm_used": False}
 
     retry_note = (
@@ -124,12 +205,11 @@ def plan(state: AgentState) -> dict:
         f"Avoid-list (real history, see system prompt): {avoid if avoid else 'none — no archetype has enough history to judge yet'}"
         f"{retry_note}"
     )
-    result = invoke_structured(llm, schema, [("system", PLAN_SYSTEM_PROMPT), ("user", user_msg)])
+    result = invoke_structured(llm, Plan, [("system", PLAN_SYSTEM_PROMPT), ("user", user_msg)])
     if result is None:
         plan_dict = _fallback_plan(archetype_list, avoid, already_tried)
-        if style != "intraday":
-            for c in plan_dict["candidates"]:
-                c["holding_days"] = 20
+        for c in plan_dict["candidates"]:
+            c["holding_days"] = 20
         return {
             "plan": plan_dict, "llm_used": False,
             "errors": state.get("errors", []) + ["plan: LLM output failed to parse after retries, used deterministic fallback"],

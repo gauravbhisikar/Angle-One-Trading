@@ -11,15 +11,13 @@ known-working template, so V1 scopes the LLM's actual judgment to
 from typing import Literal
 from pydantic import BaseModel, Field
 
+from nodes.dimensions import TREND_FILTER_NAMES, ENTRY_TRIGGER_NAMES, CONFIRMATION_NAMES, EXIT_STYLE_NAMES
+
 ARCHETYPES = [
     "momentum", "trend_following", "pullback",
     "mean_reversion", "volatility_expansion", "hybrid_momentum",
 ]
 
-INTRADAY_ARCHETYPES = [
-    "vwap_reversion", "vwap_trend", "ema_trend", "supertrend", "donchian_adx",
-    "bollinger_reversion", "macd_momentum", "rsi_pullback", "volume_breakout", "ema_vwap_hybrid",
-]
 
 
 class CandidatePlan(BaseModel):
@@ -50,22 +48,35 @@ class Plan(BaseModel):
     )
 
 
-class IntradayCandidatePlan(BaseModel):
-    archetype: Literal[
-        "vwap_reversion", "vwap_trend", "ema_trend", "supertrend", "donchian_adx",
-        "bollinger_reversion", "macd_momentum", "rsi_pullback", "volume_breakout", "ema_vwap_hybrid",
-    ]
-    risk: Literal["conservative", "moderate", "aggressive"]
-    rationale: str = Field(description="Why this archetype fits the current intraday market context, one sentence.")
-
-
-class IntradayPlan(BaseModel):
-    candidates: list[IntradayCandidatePlan] = Field(
-        description="3-8 intraday archetype candidates to backtest, drawn only from the fixed archetype list. "
-                    "Never just one — a real tournament needs multiple candidates to compare. Any archetype the "
-                    "avoid-list flags as historically poor for this regime should only be included with a "
-                    "specific reason grounded in the current data to override that history.",
-        min_length=3, max_length=8,
+# Replaces the old fixed-archetype IntradayPlan/IntradayCandidatePlan:
+# the LLM no longer picks named archetypes for intraday, it picks which
+# VALUES on each of 4 axes are worth trying today — nodes/combinatorics.py
+# then cartesian-expands the selection into individually parameterized
+# DSL candidates (dozens, not single digits). Each list here stays small
+# and Literal-typed (same order of magnitude as the old archetype picks)
+# — the LLM's structured output never has to emit the actual candidate
+# count, that's handled entirely in plain Python downstream.
+class DimensionSelectionPlan(BaseModel):
+    trend_filters: list[Literal[*TREND_FILTER_NAMES]] = Field(
+        description="Which trend-filter values to try today — 'none' is always a valid choice for a pure mean-reversion/breakout approach.",
+        min_length=1, max_length=4,
+    )
+    entry_triggers: list[Literal[*ENTRY_TRIGGER_NAMES]] = Field(
+        description="Which entry-trigger values to try today — pick a genuine mix (mean-reversion, breakout, trend-follow), not near-duplicates.",
+        min_length=2, max_length=6,
+    )
+    confirmations: list[Literal[*CONFIRMATION_NAMES]] = Field(
+        description="Which confirmation values to try today — 'none' is always a valid choice.",
+        min_length=1, max_length=3,
+    )
+    exit_styles: list[Literal[*EXIT_STYLE_NAMES]] = Field(
+        description="Which exit-style values to try today — 'tp_sl_only' is always a valid choice.",
+        min_length=1, max_length=3,
+    )
+    risk_tiers: list[Literal["conservative", "moderate", "aggressive"]] = Field(min_length=1, max_length=3)
+    regime_rationale: str = Field(
+        description="One or two sentences: which specific piece of today's context (trend, breadth, VIX, FII/DII, "
+                    "sentiment, regime) supports these particular axis choices."
     )
     research_needed: bool = Field(
         description="True only if the decision context has something unusual/conflicting a curated news/RBI feed could clarify. False for an ordinary/clear market read."
