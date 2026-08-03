@@ -23,19 +23,19 @@ func (p *MemoryProvider) Load(ctx context.Context, req BuildRequest, dc *Decisio
 	var smc StrategyMemoryContext
 
 	if successful, err := p.mgr.GetSuccessfulStrategies(ctx, 10); err == nil {
-		smc.Successful = toStrategySummaries(successful)
+		smc.Successful = p.toStrategySummaries(ctx, successful)
 	} else {
 		dc.Warnings = append(dc.Warnings, "successful strategies: "+err.Error())
 	}
 	if failed, err := p.mgr.GetFailedStrategies(ctx, 10); err == nil {
-		smc.Failed = toStrategySummaries(failed)
+		smc.Failed = p.toStrategySummaries(ctx, failed)
 	} else {
 		dc.Warnings = append(dc.Warnings, "failed strategies: "+err.Error())
 	}
 
 	if req.StrategyID != "" {
 		if history, err := p.mgr.GetStrategyHistory(ctx, req.StrategyID); err == nil {
-			smc.History = toStrategySummaries(history)
+			smc.History = p.toStrategySummaries(ctx, history)
 		} else {
 			dc.Warnings = append(dc.Warnings, "strategy history: "+err.Error())
 		}
@@ -71,13 +71,23 @@ func (p *MemoryProvider) Load(ctx context.Context, req BuildRequest, dc *Decisio
 	return nil
 }
 
-func toStrategySummaries(records []memory.StrategyRecord) []StrategySummary {
+// toStrategySummaries attaches each record's market-context-at-generation-
+// time snapshot (best-effort — older rows saved before this existed, or a
+// lookup error, just leave Context nil rather than fail the whole list).
+func (p *MemoryProvider) toStrategySummaries(ctx context.Context, records []memory.StrategyRecord) []StrategySummary {
 	out := make([]StrategySummary, 0, len(records))
 	for _, r := range records {
-		out = append(out, StrategySummary{
+		s := StrategySummary{
 			StrategyID: r.StrategyID, Version: r.Version, Name: r.Name, Status: r.Status,
 			CreatedAt: r.CreatedAt.Format("2006-01-02"),
-		})
+		}
+		if snap, err := p.mgr.GetContextForStrategy(ctx, r.StrategyID, r.Version); err == nil {
+			s.Context = &StrategyOutcomeContext{
+				Regime: snap.MarketRegime, VIX: snap.VIX, FIINet: snap.FIINet, DIINet: snap.DIINet,
+				Breadth: snap.BreadthADRatio, NewsSentiment: snap.NewsSentiment, Trend: snap.Trend,
+			}
+		}
+		out = append(out, s)
 	}
 	return out
 }

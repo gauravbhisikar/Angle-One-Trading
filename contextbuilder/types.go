@@ -148,6 +148,26 @@ type StrategySummary struct {
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	CreatedAt  string `json:"created_at"`
+
+	// Context is what the market actually looked like when THIS version
+	// was generated (regime/VIX/FII-DII/sentiment/trend) — a snapshot
+	// memory_update.py already saves per candidate but nothing previously
+	// read back. Lets the planner reason about regime-conditioned
+	// patterns ("this archetype's failures cluster around high VIX")
+	// instead of treating an archetype's win-rate as regime-independent.
+	// Omitted (not zero-valued) when no snapshot was ever recorded for
+	// this version, so absence isn't confused with "no signal that day."
+	Context *StrategyOutcomeContext `json:"context,omitempty"`
+}
+
+type StrategyOutcomeContext struct {
+	Regime        string `json:"regime,omitempty"`
+	VIX           string `json:"vix,omitempty"`
+	FIINet        string `json:"fii_net,omitempty"`
+	DIINet        string `json:"dii_net,omitempty"`
+	Breadth       string `json:"breadth,omitempty"`
+	NewsSentiment string `json:"news_sentiment,omitempty"`
+	Trend         string `json:"trend,omitempty"`
 }
 
 type BacktestSummary struct {

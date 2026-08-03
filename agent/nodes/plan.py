@@ -45,6 +45,13 @@ not merely name-drop the archetype:
    if the regime shifts (this project has no walk-forward/regime-segmented validation yet — see BACKLOG.md), and
    a low-observation lesson (just above 5) could still be noise. Never phrase a lesson-based choice as 'this is
    proven to work' — phrase it as 'this is what the sample seen so far supports'.
+7. Each entry in strategy_memory.successful/failed/history carries a `context` field — the actual regime/VIX/
+   FII-DII/sentiment/trend that was present when THAT version was generated. Look across these for a pattern
+   (e.g. "this archetype's failures cluster around VIX above 20" or "only succeeded in a bull regime") and use
+   it to inform today's pick if today's context resembles one side of that pattern. State it explicitly as an
+   observed pattern from N past instances, never as a proven causal rule — a handful of past instances is a
+   hypothesis to weigh, not a law, and `context` is missing entirely on older records (say so if you don't have
+   enough with `context` present to say anything).
 
 """ + CONTEXT_GLOSSARY
 
