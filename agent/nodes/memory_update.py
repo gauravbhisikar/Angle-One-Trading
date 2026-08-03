@@ -100,6 +100,15 @@ def memory_update(state: AgentState) -> dict:
         # without error" — a real losing strategy (0% win rate, negative
         # Sharpe) must count as a failure here, or the avoid-list in
         # plan.py would never learn to skip it.
+        #
+        # Written twice — once under the regime-agnostic key (unchanged
+        # from before) and once under a regime-specific key, when a
+        # regime read is actually available. plan.py's avoid-list lookup
+        # prefers the regime-specific lesson once it independently clears
+        # MIN_OBSERVATIONS, falling back to this same aggregate otherwise
+        # — so the aggregate write here isn't just legacy, it's the
+        # fallback's data source.
+        regime = (dc.get("regime") or {}).get("regime") or None
         try:
             clients.record_lesson(
                 key=lesson_key(c.get("archetype"), state["style"]),
@@ -108,5 +117,14 @@ def memory_update(state: AgentState) -> dict:
             )
         except Exception:
             pass
+        if regime:
+            try:
+                clients.record_lesson(
+                    key=lesson_key(c.get("archetype"), state["style"], regime),
+                    description=c.get("rationale", ""),
+                    success=bool(c.get("gate_passed")),
+                )
+            except Exception:
+                pass
 
     return {}

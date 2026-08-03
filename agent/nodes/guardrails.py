@@ -53,8 +53,9 @@ def guardrails(state: AgentState) -> dict:
     if avoid:
         a = avoid[0]
         failures = a["times_seen"] - round(a["confidence"] * a["times_seen"])
+        basis = "in this exact market regime" if a.get("regime_specific") else "in this style (regime-agnostic — not enough regime-specific samples yet)"
         reasons.append(
-            f"archetype has failed {failures}/{a['times_seen']} times historically in this style "
+            f"archetype has failed {failures}/{a['times_seen']} times historically {basis} "
             f"({a['confidence']:.0%} success rate) — hard memory guard, not just a soft suggestion"
         )
 

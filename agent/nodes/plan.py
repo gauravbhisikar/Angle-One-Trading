@@ -58,13 +58,29 @@ not merely name-drop the archetype:
 """ + CONTEXT_GLOSSARY
 
 
+def _lesson_for(by_key: dict, archetype: str, style: str, regime) -> tuple:
+    """Prefers the regime-specific lesson only if it independently clears
+    MIN_OBSERVATIONS on its own; otherwise falls back to the regime-
+    agnostic aggregate (memory_update.py writes both on every outcome).
+    No blended/weighted confidence math — a lesson either has enough
+    regime-specific samples to stand on its own or it doesn't, consistent
+    with this project's preference for simple disclosed rules over
+    invented compound formulas. Returns (lesson, is_regime_specific)."""
+    if regime:
+        specific = by_key.get(lesson_key(archetype, style, regime))
+        if specific and specific.get("times_seen", 0) >= MIN_OBSERVATIONS:
+            return specific, True
+    return by_key.get(lesson_key(archetype, style)), False
+
+
 def _avoid_archetypes(state: AgentState, archetype_list: list, style: str) -> list:
     dc = state.get("decision_context") or {}
     lessons = dc.get("lessons") or []
     by_key = {l.get("key"): l for l in lessons if isinstance(l, dict) and l.get("key")}
+    regime = (dc.get("regime") or {}).get("regime") or None
     avoid = []
     for a in archetype_list:
-        lesson = by_key.get(lesson_key(a, style))
+        lesson, is_regime_specific = _lesson_for(by_key, a, style, regime)
         if not lesson:
             continue
         if lesson.get("times_seen", 0) >= MIN_OBSERVATIONS and lesson.get("confidence", 1.0) < MAX_CONFIDENCE_TO_AVOID:
@@ -72,6 +88,7 @@ def _avoid_archetypes(state: AgentState, archetype_list: list, style: str) -> li
                 "archetype": a,
                 "times_seen": lesson["times_seen"],
                 "confidence": round(lesson.get("confidence", 0.0), 2),
+                "regime_specific": is_regime_specific,
             })
     return avoid
 

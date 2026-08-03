@@ -7,7 +7,7 @@ import random
 
 import clients
 from state import AgentState
-from nodes.lesson_keys import lesson_key
+from nodes.plan import _lesson_for
 
 MONTE_CARLO_SHUFFLES = 200
 
@@ -212,8 +212,9 @@ def assess(state: AgentState) -> dict:
 
     dc = state.get("decision_context") or {}
     lessons = dc.get("lessons") or []
-    key = lesson_key(selected["archetype"], style)
-    lesson = next((l for l in lessons if isinstance(l, dict) and l.get("key") == key), None)
+    by_key = {l.get("key"): l for l in lessons if isinstance(l, dict) and l.get("key")}
+    regime = (dc.get("regime") or {}).get("regime") or None
+    lesson, _ = _lesson_for(by_key, selected["archetype"], style, regime)
     memory_confidence = lesson.get("confidence") if lesson else None
 
     confidence = compute_confidence(bool(selected.get("gate_passed")), monte_carlo, stability, memory_confidence)
