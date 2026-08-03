@@ -38,6 +38,13 @@ def _base(strategy_id: str, name: str, holding_days: int, strategy_type: str = "
             "order_type": "MARKET", "entry": "market", "slippage_pct": 0.05,
         },
         "risk": {"max_daily_loss": 5, "max_positions": 1},
+        # Once a position exits (stop-loss, take-profit, or square-off),
+        # do not re-enter the same day even if the entry condition fires
+        # again — wait for the next trading day. risk.State.RollDay resets
+        # this counter daily (engine/internal/risk/risk.go), so "no same-
+        # day reentry" doesn't mean "never trades again," just not twice
+        # in one day.
+        "reentry": {"allowed": False},
         "holding": {"max_days": holding_days},
         "cost_model": "angel_equity",
         "benchmark": "NIFTYBEES",
