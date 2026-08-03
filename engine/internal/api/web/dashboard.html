@@ -256,18 +256,43 @@ async function refreshMarket() {
 
 /* ---------- strategy list (drives sidebar + dashboard + paper trading) ---------- */
 async function refreshStrategies() {
-  try { strategiesCache = await api('GET', '/strategies') || []; } catch (e) { strategiesCache = []; }
+  // A failed fetch is NOT the same as "zero strategies" — keep showing the
+  // last known-good list rather than wiping the dashboard to empty on a
+  // transient error (this previously made "delete one" look like "delete
+  // all" whenever the refresh right after a delete hit any hiccup).
+  let fetched;
+  try {
+    fetched = await api('GET', '/strategies');
+  } catch (e) {
+    console.error('refreshStrategies: fetch failed, keeping last known list:', e);
+    return;
+  }
+  strategiesCache = fetched || [];
   renderSidebarStrategies();
   if (currentPage === 'dashboard') renderDashboard();
   if (currentPage === 'paper') renderPaper();
 }
 
+// safeMap renders each item independently — one malformed record throwing
+// (e.g. a null field) no longer takes the whole list down with it; that
+// record just renders as an error placeholder instead of the entire
+// dashboard/sidebar/paper-trading list going blank.
+function safeMap(items, render) {
+  return items.map(item => {
+    try { return render(item); }
+    catch (e) {
+      console.error('render failed for', item && item.strategy_id, e);
+      return '<div class="card" style="color:var(--red)">Error rendering ' + (item && item.strategy_id || 'strategy') + '</div>';
+    }
+  }).join('');
+}
+
 function renderSidebarStrategies() {
   const el = document.getElementById('sidebar-strategies');
-  el.innerHTML = strategiesCache.map(s =>
+  el.innerHTML = safeMap(strategiesCache, s =>
     '<div class="sb-strat" onclick="goTo(\'paper\');setTimeout(()=>openStrategyDetail(\'' + s.strategy_id + '\'),0)">' +
     '<span class="dot ' + s.status + '"></span>' + s.strategy_name + '</div>'
-  ).join('') || '<div class="sb-strat" style="cursor:default">none yet</div>';
+  ) || '<div class="sb-strat" style="cursor:default">none yet</div>';
 }
 
 function portfolioSummary() {
@@ -288,7 +313,7 @@ function strategyCard(s, opts) {
   const pnlPct = (pnl / parseFloat(s.starting_capital) * 100);
   return '<div class="card strat-card" onclick="' + (opts.onclick || ("goTo('paper');setTimeout(()=>openStrategyDetail('" + s.strategy_id + "'),0)")) + '">' +
     '<div style="display:flex;justify-content:space-between;align-items:flex-start">' +
-      '<div><b>' + s.strategy_name + '</b><div style="font-size:11px;color:var(--muted)">' + s.symbols.join(', ') + ' · ' + s.timeframe + '</div></div>' +
+      '<div><b>' + s.strategy_name + '</b><div style="font-size:11px;color:var(--muted)">' + (s.symbols||[]).join(', ') + ' · ' + s.timeframe + '</div></div>' +
       '<button style="font-size:11px;color:var(--muted)" onclick="event.stopPropagation();removeStrategy(\'' + s.strategy_id + '\',\'' + s.strategy_name.replace(/'/g,"\\'") + '\')" title="Remove strategy">✕</button>' +
     '</div>' +
     '<div class="badges"><span class="badge ' + s.status + '">' + s.status.replace('_',' ') + '</span><span class="badge">' + s.type + '</span>' +
@@ -325,7 +350,7 @@ function renderDashboard() {
   portfolioSummary();
   const grid = document.getElementById('dash-grid');
   document.getElementById('dash-empty').style.display = strategiesCache.length ? 'none' : 'block';
-  grid.innerHTML = strategiesCache.map(s => strategyCard(s)).join('');
+  grid.innerHTML = safeMap(strategiesCache, s => strategyCard(s));
 }
 
 async function seedDemo() {
@@ -336,7 +361,7 @@ async function seedDemo() {
 function renderPaper() {
   const list = document.getElementById('paper-list');
   document.getElementById('paper-empty').style.display = strategiesCache.length ? 'none' : 'block';
-  list.innerHTML = strategiesCache.map(s => strategyCard(s, {onclick: "openStrategyDetail('" + s.strategy_id + "')"})).join('');
+  list.innerHTML = safeMap(strategiesCache, s => strategyCard(s, {onclick: "openStrategyDetail('" + s.strategy_id + "')"}));
 }
 
 async function strategyAction(id, act) {
