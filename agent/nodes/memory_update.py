@@ -1,6 +1,7 @@
 import json
 
 from state import AgentState
+from nodes.lesson_keys import lesson_key
 import clients
 
 # memory.StrategyRecord / BacktestRecord / ContextSnapshot / Deployment have
@@ -101,7 +102,7 @@ def memory_update(state: AgentState) -> dict:
         # plan.py would never learn to skip it.
         try:
             clients.record_lesson(
-                key=f"{c.get('archetype')}_{state['style']}",
+                key=lesson_key(c.get("archetype"), state["style"]),
                 description=c.get("rationale", ""),
                 success=bool(c.get("gate_passed")),
             )

@@ -1,6 +1,7 @@
 from state import AgentState
 from llm import get_llm, invoke_structured
 from nodes.schemas import Plan, CandidatePlan, IntradayPlan, IntradayCandidatePlan, ARCHETYPES, INTRADAY_ARCHETYPES
+from nodes.lesson_keys import lesson_key
 from context_glossary import CONTEXT_GLOSSARY
 
 # Same threshold contextbuilder/recommendation_provider.go already uses for
@@ -62,7 +63,7 @@ def _avoid_archetypes(state: AgentState, archetype_list: list, style: str) -> li
     by_key = {l.get("key"): l for l in lessons if isinstance(l, dict) and l.get("key")}
     avoid = []
     for a in archetype_list:
-        lesson = by_key.get(f"{a}_{style}")
+        lesson = by_key.get(lesson_key(a, style))
         if not lesson:
             continue
         if lesson.get("times_seen", 0) >= MIN_OBSERVATIONS and lesson.get("confidence", 1.0) < MAX_CONFIDENCE_TO_AVOID:
