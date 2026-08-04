@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"tradingengine/internal/analytics"
 	"tradingengine/internal/evalcutoff"
 	"tradingengine/internal/models"
@@ -22,7 +24,12 @@ type StrategySummary struct {
 	OpenPositions   int      `json:"open_positions"`
 	StartingCapital string   `json:"starting_capital"`
 	Cash            string   `json:"cash"`
-	PnL             string   `json:"pnl"`
+	// CurrentValue is cash + the live mark-to-market value of any open
+	// position (see the openValue comment in handleListStrategies) — the
+	// number to show as "what this strategy is worth right now," as
+	// opposed to Cash, which understates it while a position is open.
+	CurrentValue string `json:"current_value"`
+	PnL          string `json:"pnl"`
 	WinRate         float64  `json:"win_rate"`
 	ProfitFactor    float64  `json:"profit_factor"`
 	CompletedTrades int      `json:"completed_trades"`
@@ -99,14 +106,35 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// cash alone understates true equity while a position is open: buying
+		// debits cash by the full cost basis immediately (portfolio.Ledger.
+		// ApplyBuy), so cash-startingCapital looks like a loss roughly equal
+		// to whatever was just spent, even if the holding is worth about the
+		// same. openValue is that holding's live mark-to-market value (using
+		// the same PriceLookup the paper broker fills against), added back so
+		// currentValue/pnl reflect real live equity, not just the cash side
+		// of it — this is also what portfolioSummary's combined card sums.
 		cash := s.DefaultStartingCapital
+		openValue := decimal.Zero
 		if ledger, ok := s.peekLedger(id); ok {
 			cash = ledger.Cash()
+			if len(strat.Symbols) > 0 {
+				if pos, held := ledger.Position(strat.Symbols[0]); held {
+					price := pos.AvgPrice
+					if s.PriceLookup != nil {
+						if p, ok := s.PriceLookup(strat.Symbols[0]); ok {
+							price = p
+						}
+					}
+					openValue = price.Mul(decimal.NewFromInt(int64(pos.Quantity)))
+				}
+			}
 		}
+		currentValue := cash.Add(openValue)
 
 		trades, _ := s.Trades.ListByStrategy(strat.StrategyID, strat.StrategyVersion)
 		m := analytics.Compute(trades, s.DefaultStartingCapital, 0)
-		totalPnL := cash.Sub(s.DefaultStartingCapital)
+		totalPnL := currentValue.Sub(s.DefaultStartingCapital)
 		completed := 0
 		for _, t := range trades {
 			if t.State == models.TradeClosed || t.State == models.TradeStopped || t.State == models.TradeTargetHit {
@@ -115,6 +143,7 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 		}
 
 		winRate, profitFactor, pnl := m.WinRate, m.ProfitFactor, totalPnL.String()
+		currentValueStr := currentValue.String()
 
 		// A purged strategy has no raw trades left to compute from — fall
 		// back to the snapshot retention.Monitor took right before deleting
@@ -124,6 +153,9 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 		if dataPurged {
 			if final, ok, err := s.Strategies.GetFinalPerformance(id); err == nil && ok {
 				winRate, profitFactor, completed, pnl = final.WinRate, final.ProfitFactor, final.CompletedTrades, final.PnL
+				if finalPnL, err := decimal.NewFromString(final.PnL); err == nil {
+					currentValueStr = s.DefaultStartingCapital.Add(finalPnL).String()
+				}
 			}
 		}
 
@@ -146,7 +178,7 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			Type: string(strat.Type), AssetType: string(strat.AssetType), Symbols: strat.Symbols,
 			Timeframe: string(strat.Timeframe), Benchmark: strat.Benchmark,
 			Status: status, OpenPositions: openPositions,
-			StartingCapital: s.DefaultStartingCapital.String(), Cash: cash.String(), PnL: pnl,
+			StartingCapital: s.DefaultStartingCapital.String(), Cash: cash.String(), CurrentValue: currentValueStr, PnL: pnl,
 			WinRate: winRate, ProfitFactor: profitFactor, CompletedTrades: completed,
 			EvalProgress: evalProgress, EvalLimit: evalLimit, EvalCutoffReached: evalReached,
 			DataPurged: dataPurged, IsExperiment: hasExperimentTag(strat.Tags),

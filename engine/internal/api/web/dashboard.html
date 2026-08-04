@@ -362,6 +362,11 @@ function strategyCard(s, opts) {
     '</div>' +
     '<div class="pnl ' + (pnl>=0?'pos':'neg') + '">' + (pnl>=0?'+':'') + fmtMoney(pnl) + ' <span style="font-size:12px">(' + pnlPct.toFixed(2) + '%)</span></div>' +
     '<div class="stats-mini">' +
+      // Current value = cash + live mark-to-market of any open position
+      // (see StrategySummary.CurrentValue) — Cash alone understates this
+      // while a position is open, since buying debits cash by the full
+      // cost basis immediately.
+      '<div>Current value <b>' + fmtMoney(s.current_value) + '</b></div>' +
       '<div>Cash <b>' + fmtMoney(s.cash) + '</b></div>' +
       '<div>Win rate <b>' + s.win_rate.toFixed(1) + '%</b></div>' +
       '<div>Open positions <b>' + s.open_positions + '</b></div>' +
