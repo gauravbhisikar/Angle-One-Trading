@@ -33,8 +33,8 @@ type StrategySummary struct {
 	// before the user commits real money. EvalLimit is the threshold
 	// itself (days or trades depending on Type), so the UI never has to
 	// hardcode evalcutoff's constants separately.
-	EvalProgress      int  `json:"eval_progress"`       // days running (intraday) or completed trades (swing)
-	EvalLimit         int  `json:"eval_limit"`          // IntradayMaxAge in days, or SwingMaxExitTrades
+	EvalProgress      int  `json:"eval_progress"` // days running (intraday) or completed trades (swing)
+	EvalLimit         int  `json:"eval_limit"`    // IntradayMaxAge in days, or SwingMaxExitTrades
 	EvalCutoffReached bool `json:"eval_cutoff_reached"`
 
 	// DataPurged distinguishes "never traded" from "traded, but raw
@@ -53,6 +53,14 @@ type StrategySummary struct {
 	// portfolio totals and its own section, never mixed with strategies
 	// the agent actually recommended.
 	IsExperiment bool `json:"is_experiment"`
+
+	// LastCandleAt is the most recent wall-clock time ANY of this
+	// strategy's subscribed indicators processed a real candle close —
+	// "is it actually alive right now" reduced to one timestamp, shown
+	// directly on the card. Empty string if it's never processed one yet
+	// (just started, or genuinely stuck) — the dashboard renders that
+	// distinctly from a real recent timestamp rather than guessing.
+	LastCandleAt string `json:"last_candle_at,omitempty"`
 }
 
 func hasExperimentTag(tags []string) bool {
@@ -83,8 +91,12 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 
 		status := s.statusOf(id)
 		openPositions := 0
+		lastCandleAt := ""
 		if rt, ok := s.Engine.Get(id); ok {
 			openPositions = rt.OpenPositionCount()
+			if t, ok := rt.LastCandleAt(); ok {
+				lastCandleAt = t.UTC().Format(time.RFC3339)
+			}
 		}
 
 		cash := s.DefaultStartingCapital
@@ -138,6 +150,7 @@ func (s *Server) handleListStrategies(w http.ResponseWriter, r *http.Request) {
 			WinRate: winRate, ProfitFactor: profitFactor, CompletedTrades: completed,
 			EvalProgress: evalProgress, EvalLimit: evalLimit, EvalCutoffReached: evalReached,
 			DataPurged: dataPurged, IsExperiment: hasExperimentTag(strat.Tags),
+			LastCandleAt: lastCandleAt,
 		})
 	}
 

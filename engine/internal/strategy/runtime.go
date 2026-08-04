@@ -207,13 +207,14 @@ func (rt *Runtime) Unsubscribe() {
 // "why hasn't this taken a trade yet" is answerable by looking at real
 // numbers instead of trusting an explanation.
 type LiveIndicator struct {
-	Indicator string
-	Timeframe string
-	Params    string // human-readable, e.g. "period=14;"
-	Value     float64
-	Prev      float64
-	Flags     map[string]bool
-	Known     bool // false if the cache has no value yet (still warming up)
+	Indicator  string
+	Timeframe  string
+	Params     string // human-readable, e.g. "period=14;"
+	Value      float64
+	Prev       float64
+	Flags      map[string]bool
+	Known      bool       // false if the cache has no value yet (still warming up)
+	LastUpdate *time.Time // wall-clock time of the last candle close processed, nil if never
 }
 
 // LiveIndicators reports the current cached value of every indicator this
@@ -223,12 +224,36 @@ func (rt *Runtime) LiveIndicators() []LiveIndicator {
 	out := make([]LiveIndicator, 0, len(rt.subKeys))
 	for _, key := range rt.subKeys {
 		sig, ok := rt.deps.Cache.GetByKey(key)
-		out = append(out, LiveIndicator{
+		li := LiveIndicator{
 			Indicator: key.Indicator, Timeframe: key.Timeframe, Params: key.ParamsKey,
 			Value: sig.Value, Prev: sig.Prev, Flags: sig.Flags, Known: ok,
-		})
+		}
+		if t, tok := rt.deps.Cache.LastUpdateByKey(key); tok {
+			li.LastUpdate = &t
+		}
+		out = append(out, li)
 	}
 	return out
+}
+
+// LastCandleAt is the single most recent candle-close time across every
+// indicator this strategy subscribed to — "is this strategy actually
+// alive" reduced to one number for a strategy card, without needing the
+// full per-indicator breakdown. Returns ok=false if nothing has ever
+// updated (e.g. still warming up, or a symbol/timeframe with no data
+// flowing at all — the exact "something's actually stuck" signal a user
+// can't otherwise distinguish from "just hasn't fired yet").
+func (rt *Runtime) LastCandleAt() (time.Time, bool) {
+	var latest time.Time
+	found := false
+	for _, key := range rt.subKeys {
+		t, ok := rt.deps.Cache.LastUpdateByKey(key)
+		if ok && (!found || t.After(latest)) {
+			latest = t
+			found = true
+		}
+	}
+	return latest, found
 }
 
 func (rt *Runtime) symbolTracked(symbol string) bool {

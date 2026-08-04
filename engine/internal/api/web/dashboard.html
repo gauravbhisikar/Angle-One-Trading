@@ -326,6 +326,26 @@ function portfolioSummary() {
     '<div class="stat"><div class="label">Combined P&L (live)</div><div class="value" style="color:' + (totalPnl>=0?'var(--green)':'var(--red)') + '">' + (totalPnl>=0?'+':'') + fmtMoney(totalPnl) + '</div></div>';
 }
 
+// Whole-strategy "is it actually alive" answer, no clicking required —
+// the recurring question every time a strategy sits at zero trades for a
+// while. staleThreshold scales with the strategy's OWN timeframe (a 5m
+// strategy should update every few minutes; a 1d swing strategy only
+// updates once a session, so judging it against a 5m yardstick would
+// falsely flag it as stuck every single day).
+const TF_MINUTES = {'1m':1,'3m':3,'5m':5,'10m':10,'15m':15,'30m':30,'1h':60,'4h':240,'1d':1440,'1w':10080};
+function lastCandleHTML(s) {
+  if (s.status !== 'running' && s.status !== 'paused') return ''; // no live runtime loaded, nothing to report
+  if (!s.last_candle_at) {
+    return '<div style="font-size:11px;color:var(--amber);margin-top:4px">⚠ no candle processed yet since this process started</div>';
+  }
+  const ageMin = (Date.now() - new Date(s.last_candle_at).getTime()) / 60000;
+  const tfMin = TF_MINUTES[s.timeframe] || 1440;
+  const stale = ageMin > Math.max(tfMin * 3, 10);
+  const label = ageMin < 1 ? 'just now' : ageMin < 60 ? Math.round(ageMin) + 'm ago' : Math.round(ageMin/60) + 'h ago';
+  return '<div style="font-size:11px;margin-top:4px;color:' + (stale ? 'var(--red)' : 'var(--muted)') + '">' +
+    (stale ? '⚠ ' : '') + 'last candle processed ' + label + (stale ? ' — may be stuck, check logs' : '') + '</div>';
+}
+
 function strategyCard(s, opts) {
   opts = opts || {};
   const pnl = parseFloat(s.pnl);
@@ -345,7 +365,7 @@ function strategyCard(s, opts) {
       '<div>Win rate <b>' + s.win_rate.toFixed(1) + '%</b></div>' +
       '<div>Open positions <b>' + s.open_positions + '</b></div>' +
       '<div>Completed <b>' + s.completed_trades + '</b></div>' +
-    '</div>' + evalProgressHTML(s) + '</div>';
+    '</div>' + lastCandleHTML(s) + evalProgressHTML(s) + '</div>';
 }
 
 // Evaluation-period progress toward evalcutoff's auto-pause threshold —

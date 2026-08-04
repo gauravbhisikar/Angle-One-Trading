@@ -3,6 +3,7 @@ package indicators
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"tradingengine/internal/dsl"
 	"tradingengine/internal/models"
@@ -14,17 +15,19 @@ import (
 // subscribed series exactly once and every strategy watching that key
 // reads the same cached Signal.
 type Cache struct {
-	mu        sync.RWMutex
-	instances map[Key]Indicator
-	latest    map[Key]dsl.Signal
-	refCount  map[Key]int
+	mu         sync.RWMutex
+	instances  map[Key]Indicator
+	latest     map[Key]dsl.Signal
+	lastUpdate map[Key]time.Time
+	refCount   map[Key]int
 }
 
 func NewCache() *Cache {
 	return &Cache{
-		instances: map[Key]Indicator{},
-		latest:    map[Key]dsl.Signal{},
-		refCount:  map[Key]int{},
+		instances:  map[Key]Indicator{},
+		latest:     map[Key]dsl.Signal{},
+		lastUpdate: map[Key]time.Time{},
+		refCount:   map[Key]int{},
 	}
 }
 
@@ -56,21 +59,28 @@ func (c *Cache) Unsubscribe(key Key) {
 	if c.refCount[key] <= 0 {
 		delete(c.instances, key)
 		delete(c.latest, key)
+		delete(c.lastUpdate, key)
 		delete(c.refCount, key)
 	}
 }
 
 // OnCandleClose updates every subscribed indicator for this (symbol,
 // timeframe) exactly once. Called by the candle builder when a candle
-// closes for that pair — never per-strategy.
+// closes for that pair — never per-strategy. lastUpdate records wall-
+// clock time (not the candle's own timestamp) specifically so a stalled
+// feed is visible as "hasn't updated in 40 minutes" even if replaying
+// old/gappy data — see Runtime.LastCandleAt, built for exactly the
+// "is this strategy actually alive" question.
 func (c *Cache) OnCandleClose(symbol, timeframe string, candle models.Candle) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := time.Now()
 	for key, inst := range c.instances {
 		if key.Symbol != symbol || key.Timeframe != timeframe {
 			continue
 		}
 		c.latest[key] = inst.Update(candle)
+		c.lastUpdate[key] = now
 	}
 }
 
@@ -87,6 +97,16 @@ func (c *Cache) GetByKey(key Key) (dsl.Signal, bool) {
 	defer c.mu.RUnlock()
 	sig, ok := c.latest[key]
 	return sig, ok
+}
+
+// LastUpdateByKey returns the wall-clock time this key's indicator last
+// processed a candle close — false if it's never updated yet (still
+// warming up, no candle closed since subscribing).
+func (c *Cache) LastUpdateByKey(key Key) (time.Time, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	t, ok := c.lastUpdate[key]
+	return t, ok
 }
 
 func (c *Cache) String() string {
