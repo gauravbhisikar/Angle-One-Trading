@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -26,16 +28,39 @@ type Instrument struct {
 }
 
 // WSFeed implements marketdata.Feed against Angel One's live tick stream.
+// It survives disconnects: a single supervisor goroutine relogins, redials,
+// and resubscribes every previously-subscribed symbol whenever the socket
+// drops, instead of dying permanently on the first transient error (a dead
+// feed silently stops candle processing for every running strategy —
+// unacceptable for an unattended, multi-day live process).
 type WSFeed struct {
 	client      *Client
 	instruments map[string]Instrument // symbol -> instrument
 	tokenToSym  map[string]string     // token -> symbol, for decoding incoming ticks
 
-	conn  *websocket.Conn
-	ticks chan models.Tick
+	conn      atomic.Pointer[websocket.Conn]
+	ticks     chan models.Tick
+	closeOnce sync.Once
+	closed    atomic.Bool
+
+	// writeMu serializes every WriteMessage call across whichever conn is
+	// currently active. gorilla/websocket allows one concurrent reader and
+	// one concurrent writer per Conn, but NOT two concurrent writers —
+	// heartbeat's ping and Subscribe/resubscribeAll's subscribe frame can
+	// otherwise land on the same conn at the same instant and panic
+	// ("concurrent write to websocket connection"). The atomic conn pointer
+	// only makes swapping *which* conn is current race-free; it says
+	// nothing about serializing writes to it, which is a separate,
+	// necessary lock.
+	writeMu sync.Mutex
 
 	mu   sync.Mutex
 	subs map[string]bool
+
+	// heartbeatInterval defaults to 30s; only overridden in tests so the
+	// concurrency test below can exercise real ping traffic without a
+	// 30-second wait.
+	heartbeatInterval time.Duration
 }
 
 func NewWSFeed(client *Client, instruments map[string]Instrument) *WSFeed {
@@ -44,26 +69,50 @@ func NewWSFeed(client *Client, instruments map[string]Instrument) *WSFeed {
 		tokenToSym[inst.Token] = sym
 	}
 	return &WSFeed{
-		client:      client,
-		instruments: instruments,
-		tokenToSym:  tokenToSym,
-		ticks:       make(chan models.Tick, 4096),
-		subs:        map[string]bool{},
+		client:            client,
+		instruments:       instruments,
+		tokenToSym:        tokenToSym,
+		ticks:             make(chan models.Tick, 4096),
+		subs:              map[string]bool{},
+		heartbeatInterval: 30 * time.Second,
 	}
 }
 
 func (f *WSFeed) Ticks() <-chan models.Tick { return f.ticks }
 
+// Close stops the feed for good — no further reconnect attempts. Setting
+// closed before closing the connection is what tells the supervisor loop
+// (which sees the resulting read error) to stop reconnecting and close the
+// ticks channel exactly once, rather than treating this as a transient drop.
 func (f *WSFeed) Close() error {
-	if f.conn != nil {
-		return f.conn.Close()
+	f.closed.Store(true)
+	if conn := f.conn.Load(); conn != nil {
+		return conn.Close()
 	}
 	return nil
 }
 
-// Connect dials the feed using the session's feed token. Call once after
-// Client.Login succeeds.
-func (f *WSFeed) Connect(ctx context.Context) error {
+// Connect dials the feed using the session's feed token, then hands off to
+// a long-lived supervisor (reconnect) and heartbeat goroutine for the rest
+// of the feed's life. dialCtx bounds only this first synchronous dial — the
+// caller can treat a non-nil error here as "give up and fall back" (e.g. a
+// short boot-time timeout). lifeCtx has no deadline of its own; it's what
+// the supervisor/heartbeat goroutines and every later reconnect attempt run
+// under, and only its cancellation (engine shutdown) ever stops them —
+// using dialCtx for those too would kill the feed the moment a boot timeout
+// expires, even on a fully healthy connection.
+func (f *WSFeed) Connect(dialCtx, lifeCtx context.Context) error {
+	conn, err := f.dial(dialCtx)
+	if err != nil {
+		return err
+	}
+	f.conn.Store(conn)
+	go f.supervise(lifeCtx)
+	go f.heartbeat(lifeCtx)
+	return nil
+}
+
+func (f *WSFeed) dial(ctx context.Context) (*websocket.Conn, error) {
 	header := map[string][]string{
 		"Authorization": {"Bearer " + f.client.JWTToken()},
 		"x-api-key":     {f.client.apiKey},
@@ -72,12 +121,88 @@ func (f *WSFeed) Connect(ctx context.Context) error {
 	}
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, header)
 	if err != nil {
-		return fmt.Errorf("angelone: ws connect: %w", err)
+		return nil, fmt.Errorf("angelone: ws connect: %w", err)
 	}
-	f.conn = conn
-	go f.readLoop()
-	go f.heartbeat(ctx)
-	return nil
+	return conn, nil
+}
+
+// supervise owns the ticks channel's entire lifecycle and all reconnect
+// decisions — readLoop/heartbeat/Subscribe never close it or give up on
+// their own. On a disconnect that isn't a deliberate Close(), it relogins
+// (handles daily token expiry across a multi-day run for free), redials,
+// and resubscribes every symbol already recorded in f.subs. Backoff is
+// capped and tight while the market's open, but backs off to a long fixed
+// interval outside session hours so an overnight/weekend outage doesn't
+// hammer Angel One's login endpoint every few seconds for nothing.
+func (f *WSFeed) supervise(ctx context.Context) {
+	backoff := time.Second
+	for {
+		conn := f.conn.Load()
+		err := f.readLoop(conn)
+
+		if f.closed.Load() || ctx.Err() != nil {
+			f.closeOnce.Do(func() { close(f.ticks) })
+			return
+		}
+		log.Printf("angelone: ws disconnected (%v) — reconnecting", err)
+
+		wait := backoff
+		if !istMarketOpen(time.Now()) {
+			wait = 5 * time.Minute
+		}
+		select {
+		case <-ctx.Done():
+			f.closeOnce.Do(func() { close(f.ticks) })
+			return
+		case <-time.After(wait):
+		}
+
+		if loginErr := f.client.Login(ctx); loginErr != nil {
+			log.Printf("angelone: relogin failed: %v", loginErr)
+			backoff = nextBackoff(backoff)
+			continue
+		}
+		dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
+		newConn, dialErr := f.dial(dialCtx)
+		dialCancel()
+		if dialErr != nil {
+			log.Printf("angelone: reconnect dial failed: %v", dialErr)
+			backoff = nextBackoff(backoff)
+			continue
+		}
+		f.conn.Store(newConn)
+		f.resubscribeAll()
+		backoff = time.Second
+		log.Println("angelone: ws reconnected")
+	}
+}
+
+// istMarketOpen is a minimal, standalone NSE-hours check (Mon-Fri
+// 09:15-15:30 IST) — deliberately duplicated from
+// internal/marketsession.Current's logic rather than imported, since that
+// package pulls in internal/scheduler -> internal/execution ->
+// internal/marketdata/angelone, which would be an import cycle. Only used
+// here to pick a reconnect backoff cadence, not as a trading-hours source
+// of truth (marketsession remains that for the rest of the engine).
+func istMarketOpen(now time.Time) bool {
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		loc = time.FixedZone("IST", 5*3600+1800)
+	}
+	ist := now.In(loc)
+	if ist.Weekday() == time.Saturday || ist.Weekday() == time.Sunday {
+		return false
+	}
+	tod := ist.Format("15:04")
+	return tod >= "09:15" && tod <= "15:30"
+}
+
+func nextBackoff(b time.Duration) time.Duration {
+	b *= 2
+	if b > 30*time.Second {
+		return 30 * time.Second
+	}
+	return b
 }
 
 type subscribeRequest struct {
@@ -92,6 +217,13 @@ type subscribeRequest struct {
 	} `json:"params"`
 }
 
+// Subscribe records interest in symbols and, if connected, sends the
+// subscribe frame immediately. A wire-send failure here (e.g. landing mid
+// reconnect-gap) is logged and swallowed, not returned as a hard error —
+// the symbol is already in f.subs and resubscribeAll replays it on the next
+// successful reconnect, so failing an otherwise-valid strategy deploy over
+// a transient disconnect would be wrong. Only "no instrument mapping" (a
+// real caller error) is returned.
 func (f *WSFeed) Subscribe(symbols []string) error {
 	f.mu.Lock()
 	byExchange := map[int][]string{}
@@ -109,7 +241,41 @@ func (f *WSFeed) Subscribe(symbols []string) error {
 	}
 	f.mu.Unlock()
 
-	if len(byExchange) == 0 || f.conn == nil {
+	if len(byExchange) == 0 {
+		return nil
+	}
+	if err := f.sendSubscribeFrame(byExchange); err != nil {
+		log.Printf("angelone: subscribe send failed (will retry on reconnect): %v", err)
+	}
+	return nil
+}
+
+// resubscribeAll replays every symbol already recorded in f.subs against a
+// freshly-redialed connection — the reconnect path's counterpart to
+// Subscribe, called only from supervise.
+func (f *WSFeed) resubscribeAll() {
+	f.mu.Lock()
+	byExchange := map[int][]string{}
+	for s := range f.subs {
+		inst, ok := f.instruments[s]
+		if !ok {
+			continue
+		}
+		byExchange[inst.ExchangeType] = append(byExchange[inst.ExchangeType], inst.Token)
+	}
+	f.mu.Unlock()
+
+	if len(byExchange) == 0 {
+		return
+	}
+	if err := f.sendSubscribeFrame(byExchange); err != nil {
+		log.Printf("angelone: resubscribe failed: %v", err)
+	}
+}
+
+func (f *WSFeed) sendSubscribeFrame(byExchange map[int][]string) error {
+	conn := f.conn.Load()
+	if conn == nil {
 		return nil
 	}
 
@@ -128,30 +294,37 @@ func (f *WSFeed) Subscribe(symbols []string) error {
 	if err != nil {
 		return err
 	}
-	return f.conn.WriteMessage(websocket.TextMessage, payload)
+	f.writeMu.Lock()
+	defer f.writeMu.Unlock()
+	return conn.WriteMessage(websocket.TextMessage, payload)
 }
 
 func (f *WSFeed) heartbeat(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(f.heartbeatInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if f.conn != nil {
-				_ = f.conn.WriteMessage(websocket.TextMessage, []byte("ping"))
+			if conn := f.conn.Load(); conn != nil {
+				f.writeMu.Lock()
+				_ = conn.WriteMessage(websocket.TextMessage, []byte("ping"))
+				f.writeMu.Unlock()
 			}
 		}
 	}
 }
 
-func (f *WSFeed) readLoop() {
-	defer close(f.ticks)
+// readLoop reads from one connection until it errors (the connection was
+// closed, either deliberately via Close or by a network drop) — it never
+// closes f.ticks itself; that's supervise's job, exactly once, for the
+// feed's entire lifetime.
+func (f *WSFeed) readLoop(conn *websocket.Conn) error {
 	for {
-		msgType, data, err := f.conn.ReadMessage()
+		msgType, data, err := conn.ReadMessage()
 		if err != nil {
-			return
+			return err
 		}
 		if msgType != websocket.BinaryMessage {
 			continue

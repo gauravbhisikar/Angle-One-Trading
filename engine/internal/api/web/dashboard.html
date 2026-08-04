@@ -1130,7 +1130,9 @@ async function deploySelected() {
 
 /* ---------- boot ---------- */
 api('GET', '/version').then(v => {
-  document.getElementById('build-version').textContent = 'build: ' + (v.commit || 'dev');
+  const feedTag = v.feed_mode === 'live' ? 'LIVE feed' : v.feed_mode === 'mock' ? 'MOCK feed' : null;
+  document.getElementById('build-version').textContent =
+    'build: ' + (v.commit || 'dev') + (feedTag ? '  |  ' + feedTag : '');
 }).catch(() => {});
 refreshMarket(); refreshStrategies();
 setInterval(refreshMarket, 5000);

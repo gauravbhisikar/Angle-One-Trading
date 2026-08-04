@@ -50,6 +50,14 @@ type Config struct {
 	// (deploy.sh's -ldflags) — exposed via GET /version and shown in the
 	// dashboard footer so a redeploy is verifiable by looking at the page.
 	BuildCommit string
+
+	// FeedMode is "live" or "mock" — whichever price feed cmd/engine/main.go
+	// actually ended up constructing (USE_ANGEL_LIVE can be set but the
+	// engine still falls back to mock on a boot-time login/connect
+	// failure). Exposed via GET /version for the same reason as
+	// BuildCommit: whether the system is trading against real prices should
+	// be visible at a glance, not something to infer from behavior.
+	FeedMode string
 }
 
 type Server struct {

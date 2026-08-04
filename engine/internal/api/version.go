@@ -6,5 +6,5 @@ import "net/http"
 // load the dashboard, check the footer (or curl this endpoint) against
 // the commit you just pushed. See cmd/engine/main.go's buildCommit.
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"commit": s.BuildCommit})
+	writeJSON(w, http.StatusOK, map[string]string{"commit": s.BuildCommit, "feed_mode": s.FeedMode})
 }

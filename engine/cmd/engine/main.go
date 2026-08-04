@@ -23,6 +23,7 @@ import (
 	"tradingengine/internal/execution"
 	"tradingengine/internal/featurestore"
 	"tradingengine/internal/marketdata"
+	"tradingengine/internal/marketdata/angelone"
 	"tradingengine/internal/marketsession"
 	"tradingengine/internal/models"
 	"tradingengine/internal/retention"
@@ -62,15 +63,13 @@ func main() {
 	reviews := storage.NewReviewRepo(db)
 	predicted := storage.NewPredictedMetricsRepo(db)
 
-	// Default to the synthetic mock feed — safe for local dev/testing
-	// without broker credentials or live market hours. Angel One's real
-	// feed (internal/marketdata/angelone) is opt-in via USE_ANGEL_LIVE and
-	// intentionally never auto-selected.
-	feed := marketdata.NewMockFeed(time.Second)
-	go feed.Run()
-	if cfg.UseAngelLive {
-		log.Println("USE_ANGEL_LIVE=true is set, but live Angel One wiring must be completed explicitly (credentials + instrument master) before use — continuing on the mock feed for safety")
-	}
+	// ctx is created here (rather than just before eng.Run, as before) so
+	// buildFeed can hand it to the Angel One feed's long-lived
+	// reconnect/heartbeat goroutines — those must only ever stop on real
+	// engine shutdown, never on the short boot-time timeout buildFeed uses
+	// internally to decide whether to fall back to the mock feed.
+	ctx, cancel := context.WithCancel(context.Background())
+	feed, feedMode := buildFeed(ctx, cfg)
 
 	startingCapital := decimal.NewFromFloat(cfg.StartingCapital)
 	eng := scheduler.NewEngine(cfg.MaxConcurrentStrategies, feed, startingCapital, nil)
@@ -116,9 +115,9 @@ func main() {
 		DefaultStartingCapital: startingCapital,
 		PriceLookup:            priceLookup,
 		BuildCommit:            buildCommit,
+		FeedMode:               feedMode,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
 	go eng.Run(ctx)
 
 	// Auto-pauses every running strategy at market close (blocks new
@@ -172,4 +171,46 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = httpServer.Shutdown(shutdownCtx)
+}
+
+// buildFeed picks the engine's price source. USE_ANGEL_LIVE=true attempts a
+// real login + instrument lookup + WebSocket connect against Angel One,
+// bounded by a short boot timeout distinct from lifeCtx — a slow or down
+// broker API must not delay the whole HTTP API from coming up. Any failure
+// in that sequence (bad credentials, network unreachable, timeout) falls
+// back to the synthetic mock feed with a loud log line, never a crash.
+// lifeCtx is passed to the live feed's Connect for its long-lived
+// reconnect/heartbeat goroutines, which must keep running for the engine's
+// entire lifetime, not just until the boot timeout expires.
+func buildFeed(lifeCtx context.Context, cfg *config.Config) (marketdata.Feed, string) {
+	if !cfg.UseAngelLive {
+		feed := marketdata.NewMockFeed(time.Second)
+		go feed.Run()
+		return feed, "mock"
+	}
+
+	bootCtx, bootCancel := context.WithTimeout(lifeCtx, 25*time.Second)
+	defer bootCancel()
+
+	client := angelone.NewClient(cfg.AngelAPIKey, cfg.AngelClientID, cfg.AngelPIN, cfg.AngelTOTPSecret)
+	if err := client.Login(bootCtx); err != nil {
+		log.Printf("USE_ANGEL_LIVE=true but Angel One login failed (%v) — falling back to mock feed", err)
+		feed := marketdata.NewMockFeed(time.Second)
+		go feed.Run()
+		return feed, "mock"
+	}
+
+	httpClient := &http.Client{Timeout: 20 * time.Second}
+	inst := angelone.ResolveNIFTYBEES(bootCtx, httpClient)
+
+	wsFeed := angelone.NewWSFeed(client, map[string]angelone.Instrument{"NIFTYBEES": inst})
+	if err := wsFeed.Connect(bootCtx, lifeCtx); err != nil {
+		log.Printf("USE_ANGEL_LIVE=true but Angel One WebSocket connect failed (%v) — falling back to mock feed", err)
+		feed := marketdata.NewMockFeed(time.Second)
+		go feed.Run()
+		return feed, "mock"
+	}
+
+	log.Printf("engine: using LIVE Angel One feed for NIFTYBEES (token=%s)", inst.Token)
+	return wsFeed, "live"
 }
