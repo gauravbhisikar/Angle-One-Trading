@@ -405,6 +405,19 @@ function renderPaper() {
   }).join('');
 }
 
+// Only the buttons that actually apply to the CURRENT status — e.g.
+// "Resume" only ever works on a strategy the engine still has loaded in
+// memory as paused; after any engine restart (every redeploy) it has
+// nothing loaded at all, so status reads not_started/stopped and only
+// "Run" (which loads it fresh) actually does anything. Showing Resume
+// there just produces a confusing "not running" error for no reason.
+function actionButtonsHTML(status, id) {
+  const btn = (act, label) => '<button onclick="strategyAction(\'' + id + '\',\'' + act + '\')">' + label + '</button>';
+  if (status === 'running') return btn('pause', 'Pause') + btn('stop', 'Stop');
+  if (status === 'paused') return btn('resume', 'Resume') + btn('stop', 'Stop');
+  return btn('run', 'Run'); // stopped | not_started
+}
+
 async function strategyAction(id, act) {
   try {
     await api('POST', '/strategies/' + id + '/' + act);
@@ -491,10 +504,7 @@ async function openStrategyDetail(id) {
       '<div><h3 style="margin:0">' + s.strategy_name + '</h3>' +
       '<div style="font-size:12px;color:var(--muted)">' + s.type + ' · ' + s.asset_type + ' · ' + s.symbols.join(', ') + ' · benchmark ' + s.benchmark + '</div></div>' +
       '<div class="actions">' +
-        '<button onclick="strategyAction(\'' + id + '\',\'run\')">Run</button>' +
-        '<button onclick="strategyAction(\'' + id + '\',\'pause\')">Pause</button>' +
-        '<button onclick="strategyAction(\'' + id + '\',\'resume\')">Resume</button>' +
-        '<button onclick="strategyAction(\'' + id + '\',\'stop\')">Stop</button>' +
+        actionButtonsHTML(s.status, id) +
         '<button style="color:var(--red);border-color:var(--red)" onclick="removeStrategy(\'' + id + '\',\'' + s.strategy_name.replace(/'/g,"\\'") + '\')">Remove</button>' +
       '</div>' +
     '</div>' +
