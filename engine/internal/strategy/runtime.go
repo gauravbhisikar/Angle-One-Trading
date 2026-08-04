@@ -201,6 +201,36 @@ func (rt *Runtime) Unsubscribe() {
 	rt.subKeys = nil
 }
 
+// LiveIndicator is one indicator's real current reading — what the
+// strategy's own condition tree is actually evaluating against right now,
+// not a description of what it's supposed to do. Exists specifically so
+// "why hasn't this taken a trade yet" is answerable by looking at real
+// numbers instead of trusting an explanation.
+type LiveIndicator struct {
+	Indicator string
+	Timeframe string
+	Params    string // human-readable, e.g. "period=14;"
+	Value     float64
+	Prev      float64
+	Flags     map[string]bool
+	Known     bool // false if the cache has no value yet (still warming up)
+}
+
+// LiveIndicators reports the current cached value of every indicator this
+// strategy subscribed to (Subscribe already registered these against the
+// shared cache — this just reads back what's there right now).
+func (rt *Runtime) LiveIndicators() []LiveIndicator {
+	out := make([]LiveIndicator, 0, len(rt.subKeys))
+	for _, key := range rt.subKeys {
+		sig, ok := rt.deps.Cache.GetByKey(key)
+		out = append(out, LiveIndicator{
+			Indicator: key.Indicator, Timeframe: key.Timeframe, Params: key.ParamsKey,
+			Value: sig.Value, Prev: sig.Prev, Flags: sig.Flags, Known: ok,
+		})
+	}
+	return out
+}
+
 func (rt *Runtime) symbolTracked(symbol string) bool {
 	for _, s := range rt.Strategy.Symbols {
 		if s == symbol {

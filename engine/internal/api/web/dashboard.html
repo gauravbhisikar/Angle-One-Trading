@@ -444,7 +444,7 @@ async function openStrategyDetail(id) {
   const detail = document.getElementById('paper-detail');
   detail.innerHTML = '<div class="card" style="margin-top:16px">Loading…</div>';
 
-  const [curve, trades, logs, live, predicted, priceResp, dailyReviews] = await Promise.all([
+  const [curve, trades, logs, live, predicted, priceResp, dailyReviews, liveIndicators, dslDoc] = await Promise.all([
     api('GET', '/strategies/' + id + '/equity-curve').catch(()=>[]),
     api('GET', '/strategies/' + id + '/trades').catch(()=>[]),
     api('GET', '/strategies/' + id + '/logs').catch(()=>[]),
@@ -452,6 +452,8 @@ async function openStrategyDetail(id) {
     api('GET', '/strategies/' + id + '/predicted-metrics').catch(()=>null),
     api('GET', '/market/price/' + encodeURIComponent(s.symbols[0])).catch(()=>null),
     api('GET', '/strategies/' + id + '/daily-reviews').catch(()=>[]),
+    api('GET', '/strategies/' + id + '/live-indicators').catch(()=>null),
+    api('GET', '/strategies/' + id + '/dsl').catch(()=>null),
   ]);
 
   const openTrade = (trades||[]).slice().reverse().find(t => t.State === 'ACTIVE' || t.State === 'OPEN');
@@ -502,6 +504,7 @@ async function openStrategyDetail(id) {
       (livePrice != null ? ' · ' + s.symbols[0] + ' live price <b style="color:var(--text)">' + fmtMoney(livePrice) + '</b>' : '') +
     '</div>' +
     positionHTML +
+    strategyLogicHTML(dslDoc, liveIndicators, s.timeframe) +
     backtestVsLiveHTML(predicted, live, s.pnl, s.starting_capital) +
     '<canvas class="chart" id="detail-chart" width="900" height="220"></canvas>' +
     dailyReviewsHTML(dailyReviews) +
@@ -517,6 +520,110 @@ async function openStrategyDetail(id) {
     '</div>';
 
   drawEquityChart(document.getElementById('detail-chart'), curve);
+}
+
+// Walks a DSL condition tree ({"all":[...]}/{"any":[...]}/{"not":{...}}/leaf)
+// into a flat list of leaf rules — mirrors the engine's own collectLeaves
+// (engine/internal/strategy/runtime.go) and agent/dsl_utils.py's port of it.
+function flattenRules(cond) {
+  if (!cond) return [];
+  if (cond.all) return cond.all.flatMap(flattenRules);
+  if (cond.any) return cond.any.flatMap(flattenRules);
+  if (cond.not) return flattenRules(cond.not);
+  return [cond]; // leaf: either an indicator rule or a take_profit/stop_loss/trailing_sl shorthand
+}
+
+function findLiveReading(indicators, indicatorName, timeframe) {
+  return (indicators || []).find(li => li.Indicator === indicatorName && li.Timeframe === timeframe) || null;
+}
+
+// Best-effort "is this condition true right now" — reads the SAME Value/
+// Prev/Flags the engine's own resolver evaluates against, using the same
+// operator semantics (condition.go). Returns null (shown as "—") when it
+// can't be determined client-side rather than guessing.
+function evalRoughCondition(rule, reading, compareReading) {
+  if (!reading || !reading.Known) return null;
+  const flags = reading.Flags || {};
+  const op = rule.operator;
+  if (rule.compare_to) {
+    if (!compareReading || !compareReading.Known) return null;
+    if (op === '>') return reading.Value > compareReading.Value;
+    if (op === '<') return reading.Value < compareReading.Value;
+    if (op === 'crosses_above') return reading.Prev <= compareReading.Prev && reading.Value > compareReading.Value;
+    if (op === 'crosses_below') return reading.Prev >= compareReading.Prev && reading.Value < compareReading.Value;
+    return null;
+  }
+  if (op === '>' && rule.value != null) return reading.Value > rule.value;
+  if (op === '<' && rule.value != null) return reading.Value < rule.value;
+  if (op === 'crosses_above') {
+    if (typeof flags.crosses_above === 'boolean') return flags.crosses_above;
+    if (rule.value != null) return reading.Prev <= rule.value && reading.Value > rule.value;
+    return null;
+  }
+  if (op === 'crosses_below') {
+    if (typeof flags.crosses_below === 'boolean') return flags.crosses_below;
+    if (rule.value != null) return reading.Prev >= rule.value && reading.Value < rule.value;
+    return null;
+  }
+  if (op === 'spike_pct' && rule.value != null) return reading.Value >= rule.value;
+  if (typeof flags[op] === 'boolean') return flags[op]; // bullish/bearish/breakout_up/price_below_lower/etc.
+  return null;
+}
+
+function ruleLabel(rule) {
+  if (rule.take_profit != null) return 'Take profit at +' + rule.take_profit + '%';
+  if (rule.stop_loss != null) return 'Stop loss at -' + rule.stop_loss + '%';
+  if (rule.trailing_sl != null) return 'Trailing stop at ' + rule.trailing_sl + '%';
+  const params = Object.keys(rule).filter(k => !['indicator','operator','value','compare_to','timeframe','pattern_name'].includes(k))
+    .map(k => k + '=' + rule[k]).join(', ');
+  let s = rule.indicator + (params ? ' (' + params + ')' : '') + ' ' + rule.operator;
+  if (rule.compare_to) s += ' ' + rule.compare_to.indicator;
+  else if (rule.value != null) s += ' ' + rule.value;
+  if (rule.timeframe) s += ' [' + rule.timeframe + ']';
+  return s;
+}
+
+// The actual math the strategy runs, cross-referenced against real live
+// indicator values right now — not a description, the same numbers the
+// engine's own resolver reads before deciding to enter/exit. Built
+// specifically so "why hasn't this taken a trade" is answerable by
+// looking at real numbers instead of trusting an explanation.
+function strategyLogicHTML(dsl, liveResp, defaultTf) {
+  if (!dsl) return '';
+  const indicators = liveResp && liveResp.running ? liveResp.indicators : null;
+
+  const section = (title, cond) => {
+    const rules = flattenRules(cond);
+    if (!rules.length) return '';
+    const rows = rules.map(rule => {
+      if (rule.take_profit != null || rule.stop_loss != null || rule.trailing_sl != null) {
+        return '<div class="tourn-row" style="grid-template-columns:2fr 1fr"><div>' + ruleLabel(rule) + '</div><div style="color:var(--muted)">exit shorthand</div></div>';
+      }
+      const tf = rule.timeframe || defaultTf;
+      const reading = indicators ? findLiveReading(indicators, rule.indicator, tf) : null;
+      const compareReading = (indicators && rule.compare_to) ? findLiveReading(indicators, rule.compare_to.indicator, tf) : null;
+      const met = indicators ? evalRoughCondition(rule, reading, compareReading) : null;
+      let liveText = '<span style="color:var(--muted)">no live data (strategy not running)</span>';
+      if (reading && reading.Known) {
+        liveText = 'value <b>' + reading.Value.toFixed(2) + '</b> (prev ' + reading.Prev.toFixed(2) + ')';
+        if (compareReading && compareReading.Known) liveText += ' vs <b>' + compareReading.Value.toFixed(2) + '</b>';
+      } else if (indicators) {
+        liveText = '<span style="color:var(--muted)">still warming up — no candle closed yet</span>';
+      }
+      const metBadge = met === null ? '' :
+        (met ? ' <span style="color:#3fb950">✓ met right now</span>' : ' <span style="color:var(--muted)">✗ not met</span>');
+      return '<div class="tourn-row" style="grid-template-columns:2fr 1.5fr">' +
+        '<div>' + ruleLabel(rule) + '</div>' +
+        '<div>' + liveText + metBadge + '</div>' +
+      '</div>';
+    }).join('');
+    return '<div class="section-title" style="margin-top:16px">' + title + '</div><div class="card">' + rows + '</div>';
+  };
+
+  return section('Entry Logic (Live)', dsl.entry) + section('Exit Logic (Live)', dsl.exit) +
+    (indicators === null ? '<div class="wizard-hint">Live values only available while the strategy is running or paused — start it to see real-time readings.</div>' : '') +
+    '<div class="section-title" style="margin-top:16px">Raw DSL</div>' +
+    '<textarea class="dsl-preview" readonly>' + JSON.stringify(dsl, null, 2) + '</textarea>';
 }
 
 // Day-by-day performance from first run until now (or until it was

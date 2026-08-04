@@ -104,6 +104,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /strategies/{id}/daily-review", s.handleDailyReview)
 	s.mux.HandleFunc("GET /strategies/{id}/daily-reviews", s.handleListDailyReviews)
 	s.mux.HandleFunc("GET /strategies/{id}/logs", s.handleLogs)
+	s.mux.HandleFunc("GET /strategies/{id}/live-indicators", s.handleLiveIndicators)
+	s.mux.HandleFunc("GET /strategies/{id}/dsl", s.handleGetDSL)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -489,4 +491,40 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, entries)
+}
+
+// handleGetDSL returns the strategy's exact stored DSL JSON, byte-for-byte
+// (the same raw document SaveVersion persisted) — for "what is this
+// strategy actually doing" questions that a plain-English description
+// can't fully answer.
+func (s *Server) handleGetDSL(w http.ResponseWriter, r *http.Request) {
+	strat, raw, err := s.Strategies.GetLatestVersion(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusNotFound, "strategy not found")
+		return
+	}
+	_ = strat
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(raw)
+}
+
+type liveIndicatorsResponse struct {
+	Running    bool                     `json:"running"` // false if the engine has no live runtime for this strategy right now (stopped, or not loaded this process)
+	Indicators []strategy.LiveIndicator `json:"indicators"`
+}
+
+// handleLiveIndicators answers "is this strategy actually watching, and
+// what is it seeing right now" with real current values — not a
+// description, the live indicator cache's actual contents. Only
+// meaningful while the engine has a live Runtime for this strategy
+// (running or paused); a stopped/never-loaded strategy has nothing to
+// report since there's no in-memory state to read.
+func (s *Server) handleLiveIndicators(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	rt, ok := s.Engine.Get(id)
+	if !ok {
+		writeJSON(w, http.StatusOK, liveIndicatorsResponse{Running: false, Indicators: nil})
+		return
+	}
+	writeJSON(w, http.StatusOK, liveIndicatorsResponse{Running: true, Indicators: rt.LiveIndicators()})
 }
