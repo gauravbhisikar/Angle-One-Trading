@@ -222,6 +222,7 @@ function goTo(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + page));
   const titles = {dashboard:'Dashboard', lab:'Strategy Lab', paper:'Paper Trading', history:'Trade History', analytics:'Analytics', settings:'Settings'};
   document.getElementById('page-title').textContent = titles[page];
+  if (page !== 'paper') openDetailId = null;
   if (page === 'lab') renderLab();
   if (page === 'paper') renderPaper();
   if (page === 'history') renderHistorySelect();
@@ -471,11 +472,22 @@ function drawEquityChart(canvas, points) {
   ctx.stroke();
 }
 
+// Tracks whichever strategy's detail panel is currently open so the
+// setInterval below can silently keep its live position/PnL numbers
+// current — without this, "live price"/"current value"/"PROFIT or LOSS"
+// were only ever a snapshot from the instant you clicked into the
+// strategy, identical in spirit to the mock-feed-era staleness this whole
+// live-feed effort was meant to fix.
+let openDetailId = null;
+
 async function openStrategyDetail(id) {
   const s = strategiesCache.find(x => x.strategy_id === id);
   if (!s) return;
+  openDetailId = id;
   const detail = document.getElementById('paper-detail');
-  detail.innerHTML = '<div class="card" style="margin-top:16px">Loading…</div>';
+  const isRefresh = detail.dataset.detailId === id;
+  if (!isRefresh) detail.innerHTML = '<div class="card" style="margin-top:16px">Loading…</div>';
+  detail.dataset.detailId = id;
 
   const [curve, trades, logs, live, predicted, priceResp, dailyReviews, liveIndicators, dslDoc] = await Promise.all([
     api('GET', '/strategies/' + id + '/equity-curve').catch(()=>[]),
@@ -735,6 +747,7 @@ async function removeStrategy(id, name) {
   if (!confirm('Remove "' + name + '" permanently? This deletes its trades, logs, and history — cannot be undone.')) return;
   try {
     await api('DELETE', '/strategies/' + id);
+    if (openDetailId === id) openDetailId = null;
     document.getElementById('paper-detail').innerHTML = '';
     await refreshStrategies();
   } catch (e) {
@@ -1137,6 +1150,7 @@ api('GET', '/version').then(v => {
 refreshMarket(); refreshStrategies();
 setInterval(refreshMarket, 5000);
 setInterval(refreshStrategies, 5000);
+setInterval(() => { if (openDetailId) openStrategyDetail(openDetailId); }, 5000);
 </script>
 </body>
 </html>

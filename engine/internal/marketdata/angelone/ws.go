@@ -209,7 +209,7 @@ type subscribeRequest struct {
 	CorrelationID string `json:"correlationID"`
 	Action        int    `json:"action"` // 1=subscribe, 0=unsubscribe
 	Params        struct {
-		Mode      int `json:"mode"` // 1=LTP
+		Mode      int `json:"mode"` // 2=Quote (LTP mode 1 carries no volume field at all — see decodeTickPacket)
 		TokenList []struct {
 			ExchangeType int      `json:"exchangeType"`
 			Tokens       []string `json:"tokens"`
@@ -282,7 +282,7 @@ func (f *WSFeed) sendSubscribeFrame(byExchange map[int][]string) error {
 	var req subscribeRequest
 	req.CorrelationID = "engine"
 	req.Action = 1
-	req.Params.Mode = 1
+	req.Params.Mode = 2
 	for ex, tokens := range byExchange {
 		req.Params.TokenList = append(req.Params.TokenList, struct {
 			ExchangeType int      `json:"exchangeType"`
@@ -329,13 +329,16 @@ func (f *WSFeed) readLoop(conn *websocket.Conn) error {
 		if msgType != websocket.BinaryMessage {
 			continue
 		}
-		if tick, ok := decodeLTPPacket(data, f.tokenToSym); ok {
+		if tick, ok := decodeTickPacket(data, f.tokenToSym); ok {
 			f.ticks <- tick
 		}
 	}
 }
 
-// decodeLTPPacket parses SmartAPI's LTP-mode binary tick (51 bytes):
+// decodeTickPacket parses SmartAPI's Quote-mode binary tick (Subscribe
+// requests mode=2 — see sendSubscribeFrame). Byte offsets verified 2026-08
+// against Angel One's own official smartapi-python client
+// (SmartApi/smartWebSocketV2.py's _parse_binary_data):
 //
 //	[0]     subscription mode
 //	[1]     exchange type
@@ -343,10 +346,16 @@ func (f *WSFeed) readLoop(conn *websocket.Conn) error {
 //	[27:35] sequence number, int64 LE
 //	[35:43] exchange timestamp (epoch ms), int64 LE
 //	[43:51] last traded price (paise), int64 LE
+//	[51:59] last traded quantity, int64 LE — the per-trade fill size,
+//	        i.e. exactly what a candle's Volume should sum across ticks
+//	        (NOT the "volume traded for the day" field at [67:75], which
+//	        is a cumulative day total and would wildly overcount if
+//	        accumulated per-tick the way OneMinuteBuilder.OnTick does)
 //
-// Verify these offsets against SmartAPI's current WebSocket 2.0 docs
-// before relying on this in a live session (see package doc).
-func decodeLTPPacket(data []byte, tokenToSym map[string]string) (models.Tick, bool) {
+// Only present when the subscribed mode is Quote (2) or SnapQuote/Full (3)
+// — LTP mode (1) is 51 bytes and carries no quantity/volume field at all,
+// which is why this feed subscribes at mode 2, not 1.
+func decodeTickPacket(data []byte, tokenToSym map[string]string) (models.Tick, bool) {
 	if len(data) < 51 {
 		return models.Tick{}, false
 	}
@@ -358,9 +367,15 @@ func decodeLTPPacket(data []byte, tokenToSym map[string]string) (models.Tick, bo
 	tsMillis := int64(binary.LittleEndian.Uint64(data[35:43]))
 	ltpPaise := int64(binary.LittleEndian.Uint64(data[43:51]))
 
+	var qty int64
+	if len(data) >= 59 {
+		qty = int64(binary.LittleEndian.Uint64(data[51:59]))
+	}
+
 	return models.Tick{
 		Symbol:    symbol,
 		Price:     decimal.NewFromInt(ltpPaise).Div(decimal.NewFromInt(100)),
+		Volume:    qty,
 		Timestamp: time.UnixMilli(tsMillis),
 	}, true
 }

@@ -2,6 +2,7 @@ package angelone
 
 import (
 	"context"
+	"encoding/binary"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/shopspring/decimal"
 )
 
 // wsPair spins up a real local WebSocket server and dials it, returning a
@@ -129,6 +131,51 @@ func TestSubscribeWithoutConnDoesNotError(t *testing.T) {
 	f := NewWSFeed(&Client{}, map[string]Instrument{"NIFTYBEES": {ExchangeType: 1, Token: "10576"}})
 	if err := f.Subscribe([]string{"NIFTYBEES"}); err != nil {
 		t.Fatalf("Subscribe before Connect should not hard-fail: %v", err)
+	}
+}
+
+// TestDecodeTickPacketExtractsVolume guards against regressing back to the
+// real bug found live on 2026-08-04: subscribing in LTP mode (or reading
+// the wrong byte range) leaves every tick's Volume at 0, silently starving
+// any strategy whose entry/exit logic depends on a real volume condition
+// (e.g. volume_spike_pct) — it looks exactly like "still warming up"
+// forever, never like an error.
+func TestDecodeTickPacketExtractsVolume(t *testing.T) {
+	data := make([]byte, 59)
+	data[0] = 2 // subscription mode: Quote
+	data[1] = 1 // exchange type: NSE_CM
+	copy(data[2:27], "10576")
+	binary.LittleEndian.PutUint64(data[27:35], 1)                    // sequence number
+	binary.LittleEndian.PutUint64(data[35:43], uint64(1754300000000)) // exchange timestamp (ms)
+	binary.LittleEndian.PutUint64(data[43:51], 27885)                 // LTP: 278.85 rupees, paise-scaled
+	binary.LittleEndian.PutUint64(data[51:59], 42)                    // last traded quantity
+
+	tick, ok := decodeTickPacket(data, map[string]string{"10576": "NIFTYBEES"})
+	if !ok {
+		t.Fatal("expected decode to succeed")
+	}
+	if tick.Symbol != "NIFTYBEES" {
+		t.Errorf("Symbol = %q, want NIFTYBEES", tick.Symbol)
+	}
+	if !tick.Price.Equal(decimal.NewFromFloat(278.85)) {
+		t.Errorf("Price = %v, want 278.85", tick.Price)
+	}
+	if tick.Volume != 42 {
+		t.Errorf("Volume = %d, want 42 (the real bug: this used to always be 0)", tick.Volume)
+	}
+}
+
+func TestDecodeTickPacketShorterThanQuoteModeHasZeroVolume(t *testing.T) {
+	data := make([]byte, 51) // LTP-mode-length packet, no quantity field
+	copy(data[2:27], "10576")
+	binary.LittleEndian.PutUint64(data[43:51], 27885)
+
+	tick, ok := decodeTickPacket(data, map[string]string{"10576": "NIFTYBEES"})
+	if !ok {
+		t.Fatal("expected decode to succeed on a short (LTP-length) packet")
+	}
+	if tick.Volume != 0 {
+		t.Errorf("Volume = %d, want 0 for a packet too short to carry a quantity field", tick.Volume)
 	}
 }
 
