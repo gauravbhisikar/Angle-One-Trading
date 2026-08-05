@@ -130,6 +130,78 @@ func TestRuntimeEntryAndExit(t *testing.T) {
 	t.Logf("orders=%d trades=%d final_cash=%s final_pnl=%s", len(loggedOrders), len(loggedTrades), ledger.Cash(), last.PnL)
 }
 
+// TestEntryGateConvertsToIST is the regression test for a real bug found
+// live 2026-08-05: tryEntry's market-hours gate compared candle.OpenTime's
+// raw formatted time-of-day directly against IST wall-clock constants
+// ("09:15"/"15:30") with no timezone conversion — internal/marketsession
+// does this correctly (converts to IST first), internal/strategy did not.
+// A UTC candle timestamp during real IST market hours got silently
+// rejected (06:26 UTC = 11:56 IST, but "06:26" < "09:15" as a bare
+// string), and — because it happened to number-match — a UTC timestamp
+// clearly AFTER real IST market close was silently allowed (12:00 UTC =
+// 17:30 IST, well past close, but "12:00" reads as within the window as a
+// bare string). The existing smoke test above never caught this because
+// its fixed 10:00 UTC candle coincidentally falls inside the window either
+// way, with or without IST conversion.
+func TestEntryGateConvertsToIST(t *testing.T) {
+	newRuntime := func() (*strategy.Runtime, *indicators.Cache, *[]models.Trade) {
+		s, err := dsl.Parse([]byte(smokeDSL))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		cache := indicators.NewCache()
+		ledger := portfolio.NewLedger(decimal.NewFromInt(100000))
+		riskState := risk.NewState(s.Risk.MaxPositions, s.Risk.MaxDailyLoss, ledger.Cash())
+		costModel, err := cost.Get(s.CostModel)
+		if err != nil {
+			t.Fatalf("cost.Get: %v", err)
+		}
+		broker := execution.NewPaperBroker(execution.FillBasic, func(string) (decimal.Decimal, bool) {
+			return decimal.NewFromInt(100), true
+		})
+		var trades []models.Trade
+		rt := strategy.NewRuntime(s, strategy.Deps{
+			Cache: cache, Broker: broker, Ledger: ledger, Risk: riskState,
+			Cost: costModel, Hooks: strategy.Hooks{OnTrade: func(tr models.Trade) { trades = append(trades, tr) }},
+		})
+		if err := rt.Subscribe(); err != nil {
+			t.Fatalf("subscribe: %v", err)
+		}
+		return rt, cache, &trades
+	}
+	buildCandle := func(t time.Time) models.Candle {
+		p := decimal.NewFromInt(100)
+		return models.Candle{
+			Symbol: "TESTSTOCK", Timeframe: models.TF1m, OpenTime: t, CloseTime: t.Add(time.Minute),
+			Open: p, High: p, Low: p, Close: p, Volume: 1000, Closed: true,
+		}
+	}
+
+	t.Run("UTC timestamp during real IST market hours must enter", func(t *testing.T) {
+		rt, cache, trades := newRuntime()
+		// 06:26 UTC == 11:56 IST — squarely inside 09:15-15:30 IST.
+		c := buildCandle(time.Date(2026, 8, 5, 6, 26, 0, 0, time.UTC))
+		cache.OnCandleClose("TESTSTOCK", string(models.TF1m), c)
+		rt.OnCandleClose(context.Background(), "TESTSTOCK", models.TF1m, c)
+		if len(*trades) != 1 {
+			t.Fatalf("expected 1 trade during real IST market hours, got %d — market-hours gate is comparing the wrong timezone", len(*trades))
+		}
+	})
+
+	t.Run("UTC timestamp after real IST market close must not enter", func(t *testing.T) {
+		rt, cache, trades := newRuntime()
+		// 12:00 UTC == 17:30 IST — well after the 15:30 IST close, even
+		// though "12:00" reads as inside the 09:15-15:30 window as a bare
+		// string (the exact false-allow the old bug produced).
+		c := buildCandle(time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC))
+		cache.OnCandleClose("TESTSTOCK", string(models.TF1m), c)
+		rt.OnCandleClose(context.Background(), "TESTSTOCK", models.TF1m, c)
+		if len(*trades) != 0 {
+			t.Fatalf("expected 0 trades after real IST market close, got %d — market-hours gate let a post-close candle through", len(*trades))
+		}
+	})
+}
+
 func TestConcurrencyLimitIsRealCap(t *testing.T) {
 	// Sanity check that ResolveQuantity rejects rather than rounds up when
 	// capital is too small for one share (ENGINE_SPEC Sec 1.1) — the other

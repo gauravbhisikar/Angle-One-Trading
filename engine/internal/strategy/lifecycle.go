@@ -16,8 +16,29 @@ import (
 const marketOpen = "09:15"
 const marketClose = "15:30"
 
+// istLocation matches internal/marketsession's own copy exactly (this
+// package can't import that one — marketsession -> scheduler -> strategy
+// would cycle back here) — same tiny, deliberately duplicated snippet used
+// in internal/marketdata/angelone for the identical reason.
+var istLocation = func() *time.Location {
+	loc, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		return time.FixedZone("IST", 5*3600+1800) // fallback: fixed +05:30, no DST in India anyway
+	}
+	return loc
+}()
+
+// timeOfDay converts to IST before formatting — marketOpen/marketClose
+// (and Session.EntryStart/EntryEnd, ForceSquareOff) are all IST wall-clock
+// values (NSE's real 09:15-15:30 IST hours). Without this conversion, a
+// candle timestamp in any other zone (UTC ticks from the real Angel One
+// feed, or a server whose system clock isn't IST) gets compared against
+// IST constants directly — real bug found 2026-08-05: this silently
+// blocked every intraday entry whenever the server's local time-of-day
+// didn't happen to already read as IST, with no log line at all (tryEntry
+// returns early, before anything worth logging).
 func timeOfDay(t time.Time) string {
-	return t.Format("15:04")
+	return t.In(istLocation).Format("15:04")
 }
 
 func (rt *Runtime) tryEntry(ctx context.Context, symbol string, candle models.Candle) {
