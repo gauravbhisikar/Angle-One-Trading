@@ -22,6 +22,29 @@ type Pipeline struct {
 	listeners         map[int]OnClose
 	nextListenerID    int
 	subscribedSymbols map[string]bool
+
+	// rawTick fires on every tick, before it's folded into the 1-minute
+	// candle — display-only (dashboard "live price"), never used for order
+	// fills. Fills stay on the 1-minute-candle-close price (see
+	// cmd/engine/main.go's priceLookup) deliberately: that's the
+	// conservative, backtestable execution model this engine commits to.
+	// A raw last-trade ticker is purely cosmetic on top of that, not a
+	// second execution price source.
+	rawTick OnRawTick
+}
+
+// OnRawTick receives one tick exactly as the feed produced it, before any
+// candle aggregation.
+type OnRawTick func(t models.Tick)
+
+// SetRawTickObserver registers the one callback notified on every raw
+// tick — for a live-feeling price display only. Like SetIndicatorUpdater,
+// there's exactly one of these (not a listener list): today's only
+// consumer is cmd/engine/main.go's display-price tracker.
+func (p *Pipeline) SetRawTickObserver(fn OnRawTick) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.rawTick = fn
 }
 
 func NewPipeline(feed Feed) *Pipeline {
@@ -146,6 +169,12 @@ func (p *Pipeline) Run(ctx context.Context) {
 		case t, ok := <-ticks:
 			if !ok {
 				return
+			}
+			p.mu.Lock()
+			rawTick := p.rawTick
+			p.mu.Unlock()
+			if rawTick != nil {
+				rawTick(t)
 			}
 			p.builder.OnTick(t)
 		}

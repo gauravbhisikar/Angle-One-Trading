@@ -1153,9 +1153,9 @@ api('GET', '/version').then(v => {
     'build: ' + (v.commit || 'dev') + (feedTag ? '  |  ' + feedTag : '');
 }).catch(() => {});
 refreshMarket(); refreshStrategies();
-setInterval(refreshMarket, 5000);
-setInterval(refreshStrategies, 5000);
-setInterval(() => { if (openDetailId) openStrategyDetail(openDetailId); }, 5000);
+setInterval(refreshMarket, 1000);
+setInterval(refreshStrategies, 1000);
+setInterval(() => { if (openDetailId) openStrategyDetail(openDetailId); }, 1000);
 </script>
 </body>
 </html>

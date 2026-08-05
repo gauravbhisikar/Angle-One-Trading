@@ -76,7 +76,11 @@ func main() {
 
 	// Track the latest close per symbol so the paper broker has a price
 	// to fill against — fed by the same shared 1-minute stream everything
-	// else uses, not a separate lookup pipeline.
+	// else uses, not a separate lookup pipeline. Deliberately NOT tick-
+	// level: fills against the last CLOSED 1-minute candle (never a
+	// mid-candle tick) is the conservative, backtestable execution model
+	// this engine commits to — a real, if modest, correctness choice, not
+	// a limitation to route around for the display price below.
 	var priceMu sync.RWMutex
 	latestPrice := map[string]decimal.Decimal{}
 	eng.Pipeline.OnCandleClose(func(symbol string, tf models.Timeframe, candle models.Candle) {
@@ -96,6 +100,29 @@ func main() {
 
 	broker := execution.NewPaperBroker(execution.FillBasic, priceLookup)
 
+	// Separate, tick-level price for DISPLAY only (dashboard "live price"/
+	// mark-to-market) — updates on every raw tick instead of waiting for a
+	// full 1-minute candle to close, so the UI actually feels live instead
+	// of stepping once a minute. Never used for fills; see priceLookup
+	// above for why fills deliberately stay on the slower, conservative
+	// price.
+	var tickMu sync.RWMutex
+	liveTickPrice := map[string]decimal.Decimal{}
+	eng.Pipeline.SetRawTickObserver(func(t models.Tick) {
+		tickMu.Lock()
+		liveTickPrice[t.Symbol] = t.Price
+		tickMu.Unlock()
+	})
+	displayPriceLookup := func(symbol string) (decimal.Decimal, bool) {
+		tickMu.RLock()
+		p, ok := liveTickPrice[symbol]
+		tickMu.RUnlock()
+		if ok {
+			return p, true
+		}
+		return priceLookup(symbol) // fall back to the 1m-candle price until the first raw tick arrives
+	}
+
 	featureStore, err := featurestore.Open(context.Background(), cfg.FeatureStorePath)
 	if err != nil {
 		log.Fatalf("featurestore: %v", err)
@@ -113,7 +140,7 @@ func main() {
 		Broker:                 broker,
 		FeatureStore:           featureStore,
 		DefaultStartingCapital: startingCapital,
-		PriceLookup:            priceLookup,
+		PriceLookup:            displayPriceLookup,
 		BuildCommit:            buildCommit,
 		FeedMode:               feedMode,
 		LoginUsername:          cfg.LoginUsername,
