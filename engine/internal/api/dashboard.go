@@ -8,6 +8,9 @@ import (
 //go:embed web/dashboard.html
 var dashboardHTML []byte
 
+//go:embed web/login.html
+var loginHTML []byte
+
 //go:embed web/nifty_history.json
 var niftyHistorySnapshot []byte
 

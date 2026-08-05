@@ -98,7 +98,11 @@ def generate_stream(req: GenerateRequest):
             # the step-by-step progress list) and "custom" (backtest.py's
             # per-candidate writer() calls — real "testing X... done" events
             # as they happen, not a single opaque "backtest" step).
-            for mode, payload in GRAPH.stream(initial_state, stream_mode=["updates", "custom"]):
+            # See graph.py::run_agent's comment on recursion_limit — the
+            # same node-count math applies here, same fix.
+            for mode, payload in GRAPH.stream(
+                initial_state, stream_mode=["updates", "custom"], config={"recursion_limit": 60}
+            ):
                 if mode == "custom":
                     # payload already carries its own "type" (e.g.
                     # "backtest_candidate" from backtest.py's writer calls)

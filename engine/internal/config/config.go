@@ -21,6 +21,13 @@ type Config struct {
 	StartingCapital          float64
 	UseAngelLive             bool
 	MarketSessionPollSeconds int
+
+	// LoginUsername/LoginPassword/LoginKey gate the dashboard for any
+	// non-loopback caller (api.Server.authMiddleware) — see LOGIN_USERNAME/
+	// LOGIN_PASSWORD/LOGIN_KEY below. Any one left empty disables the gate.
+	LoginUsername string
+	LoginPassword string
+	LoginKey      string
 }
 
 // Load reads a .env file (if present) into the process environment without
@@ -38,6 +45,9 @@ func Load(envPath string) (*Config, error) {
 		SQLitePath:       getEnvDefault("SQLITE_PATH", "trading.db"),
 		FeatureStorePath: getEnvDefault("FEATURE_STORE_PATH", "features.db"),
 		APIAddr:          getEnvDefault("API_ADDR", ":9080"),
+		LoginUsername:    os.Getenv("LOGIN_USERNAME"),
+		LoginPassword:    os.Getenv("LOGIN_PASSWORD"),
+		LoginKey:         os.Getenv("LOGIN_KEY"),
 	}
 
 	max, err := strconv.Atoi(getEnvDefault("MAX_CONCURRENT_STRATEGIES", "10"))

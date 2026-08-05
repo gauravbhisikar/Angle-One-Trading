@@ -116,9 +116,19 @@ func main() {
 		PriceLookup:            priceLookup,
 		BuildCommit:            buildCommit,
 		FeedMode:               feedMode,
+		LoginUsername:          cfg.LoginUsername,
+		LoginPassword:          cfg.LoginPassword,
+		LoginKey:               cfg.LoginKey,
 	})
 
 	go eng.Run(ctx)
+
+	// Restores whatever was actually running/paused before this process
+	// last stopped — scheduler.Engine's runtime map is pure in-memory, so
+	// without this every redeploy would silently drop every strategy back
+	// to not_started until someone noticed and clicked Run again. Runs
+	// before the HTTP port is reachable (below), so nothing can race it.
+	server.AutoResumeAll()
 
 	// Auto-pauses every running strategy at market close (blocks new
 	// entries, keeps managing whatever's already open) and auto-resumes

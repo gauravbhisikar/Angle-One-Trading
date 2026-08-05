@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Trading Engine — Sign in</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%20100%20100%27%3E%3Ctext%20y=%27.9em%27%20font-size=%2790%27%3E%F0%9F%93%88%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #131a22; --border: #223041; --text: #e6edf3; --muted: #8b98a5;
+    --red: #f85149; --blue: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 28px; width: 320px; }
+  h1 { font-size: 16px; margin: 0 0 18px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
+  input { width: 100%; padding: 8px 10px; font-size: 13px; border-radius: 6px; border: 1px solid var(--border);
+    background: #0f151c; color: var(--text); }
+  input:focus { outline: none; border-color: var(--blue); }
+  button { width: 100%; margin-top: 18px; padding: 9px; font-size: 13px; font-weight: 600; border-radius: 6px;
+    border: 1px solid var(--blue); background: var(--blue); color: #041018; cursor: pointer; }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .6; cursor: default; }
+  .error { color: var(--red); font-size: 12px; margin-top: 10px; min-height: 14px; }
+</style>
+</head>
+<body>
+  <form class="card" id="login-form">
+    <h1>AI Trading Engine</h1>
+    <label for="username">Username</label>
+    <input id="username" name="username" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <label for="key">Key</label>
+    <input id="key" name="key" type="password" autocomplete="off" required>
+    <button type="submit" id="submit-btn">Sign in</button>
+    <div class="error" id="error-text"></div>
+  </form>
+<script>
+document.getElementById('login-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submit-btn');
+  const errorText = document.getElementById('error-text');
+  errorText.textContent = '';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+        key: document.getElementById('key').value,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorText.textContent = body.error || 'Sign in failed.';
+      btn.disabled = false;
+      return;
+    }
+    location.reload();
+  } catch (err) {
+    errorText.textContent = 'Network error — try again.';
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

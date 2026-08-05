@@ -86,4 +86,12 @@ def run_agent(style: str, symbol: str = "NIFTYBEES") -> dict:
         "max_retries": 2,
         "errors": [],
     }
-    return GRAPH.invoke(initial_state)
+    # Default LangGraph recursion_limit (25) counts total node executions,
+    # not retry attempts — the intraday path's retry loop (plan_node ->
+    # expand_node -> quick_filter_node -> generate_dsl -> validate ->
+    # backtest -> rank -> guardrails) is 8 nodes long, so max_retries=2's
+    # intended 3 attempts alone can reach ~24-25 just from the loop, before
+    # even counting gather_context or the post-loop assess/self_review/
+    # memory_update tail. Not an infinite loop — just no longer enough
+    # headroom since expand_node/quick_filter_node were added.
+    return GRAPH.invoke(initial_state, config={"recursion_limit": 60})

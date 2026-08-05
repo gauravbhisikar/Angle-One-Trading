@@ -150,6 +150,28 @@ func (r *StrategyRepo) GetLastRunAt(strategyID string) (time.Time, bool, error) 
 	return t, true, nil
 }
 
+// SetDesiredStatus persists the last status explicitly set via /run,
+// /pause, /resume, or /stop — see api.Server.setStatus, the single call
+// site. AutoResumeAll reads this at boot to restore whatever was actually
+// running before the process restarted, since scheduler.Engine's runtime
+// map itself is pure in-memory and doesn't survive a redeploy.
+func (r *StrategyRepo) SetDesiredStatus(strategyID, status string) error {
+	_, err := r.db.Exec(
+		`UPDATE strategies SET desired_status = ? WHERE strategy_id = ?`,
+		status, strategyID,
+	)
+	return err
+}
+
+func (r *StrategyRepo) GetDesiredStatus(strategyID string) (string, error) {
+	var status string
+	err := r.db.QueryRow(`SELECT desired_status FROM strategies WHERE strategy_id = ?`, strategyID).Scan(&status)
+	if err != nil {
+		return "", err
+	}
+	return status, nil
+}
+
 // SetPurgedAt marks that retention.Monitor already deleted this strategy's
 // trades/orders/logs — makes the purge idempotent (checked before
 // re-running the delete queries every poll) and lets the dashboard show

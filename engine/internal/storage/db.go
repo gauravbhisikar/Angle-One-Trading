@@ -158,6 +158,12 @@ var strategiesExtraColumns = []string{
 	`ALTER TABLE strategies ADD COLUMN final_win_rate REAL NOT NULL DEFAULT 0`,
 	`ALTER TABLE strategies ADD COLUMN final_profit_factor REAL NOT NULL DEFAULT 0`,
 	`ALTER TABLE strategies ADD COLUMN final_completed_trades INTEGER NOT NULL DEFAULT 0`,
+	// desired_status is the last status explicitly set via /run, /pause,
+	// /resume, or /stop — durable across process restarts, unlike
+	// scheduler.Engine's in-memory runtime map, so the engine can restore
+	// what was actually running before a redeploy instead of leaving every
+	// strategy stopped until someone notices and clicks Run again.
+	`ALTER TABLE strategies ADD COLUMN desired_status TEXT NOT NULL DEFAULT ''`,
 }
 
 func migrate(db *sql.DB) error {

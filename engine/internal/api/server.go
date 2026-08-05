@@ -5,7 +5,12 @@
 package api
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -58,6 +63,16 @@ type Config struct {
 	// BuildCommit: whether the system is trading against real prices should
 	// be visible at a glance, not something to infer from behavior.
 	FeedMode string
+
+	// LoginUsername/LoginPassword/LoginKey gate every non-loopback request
+	// behind a login form (see authMiddleware) — the dashboard now runs on
+	// a public IP against a real broker feed, with no auth otherwise. Any
+	// of the three left empty disables the gate entirely (today's open
+	// behavior) — intentional so a fresh local clone isn't locked out by
+	// default; the real deployment gets real values set in its own .env.
+	LoginUsername string
+	LoginPassword string
+	LoginKey      string
 }
 
 type Server struct {
@@ -71,16 +86,151 @@ type Server struct {
 	// frees its concurrency slot, ENGINE_SPEC Sec 0.6) — without this, a
 	// stopped strategy would look identical to one that never ran.
 	lastStatus map[string]string
+
+	// sessions maps an opaque session token (the cookie value) to its
+	// expiry. In-memory only, single-process — this is a single-user
+	// system, no need for real session infrastructure; a restart simply
+	// logs everyone out, same as any other in-memory state here.
+	sessions map[string]time.Time
 }
 
 func NewServer(cfg Config) *Server {
-	s := &Server{Config: cfg, ledgers: map[string]*portfolio.Ledger{}, lastStatus: map[string]string{}}
+	s := &Server{
+		Config: cfg, ledgers: map[string]*portfolio.Ledger{}, lastStatus: map[string]string{},
+		sessions: map[string]time.Time{},
+	}
 	s.mux = http.NewServeMux()
 	s.routes()
 	return s
 }
 
-func (s *Server) Handler() http.Handler { return s.mux }
+// Handler wraps the router in authMiddleware — every route (including
+// ones registered by routes() below) goes through the login gate, except
+// requests from loopback (see authMiddleware) and POST /login itself.
+func (s *Server) Handler() http.Handler { return s.authMiddleware(s.mux) }
+
+// loginConfigured reports whether the login gate is actually active — all
+// three of username/password/key must be set. Left unconfigured (e.g. a
+// fresh local clone with no .env) means the gate is a no-op passthrough,
+// exactly today's behavior.
+func (s *Server) loginConfigured() bool {
+	return s.LoginUsername != "" && s.LoginPassword != "" && s.LoginKey != ""
+}
+
+const sessionCookieName = "engine_session"
+const sessionTTL = 7 * 24 * time.Hour
+
+// isLoopback reports whether the request arrived over the loopback
+// interface — used to let agent/contextbuilder's existing
+// ENGINE_URL=http://localhost:9080 calls keep working with zero changes on
+// the Python side. The login gate exists for the *public* IP a browser
+// hits, not for the engine's own internal callers on the same machine.
+func isLoopback(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// authMiddleware is a no-op passthrough when the login gate isn't
+// configured (loginConfigured() false) or the caller is on loopback.
+// Otherwise: POST /login is always reachable; anything else needs a valid
+// session cookie, or gets the login page (GET, browser navigation) or a
+// 401 JSON body (everything else — the dashboard's own XHR calls before
+// its cookie exists).
+func (s *Server) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.loginConfigured() || isLoopback(r.RemoteAddr) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/login" && r.Method == http.MethodPost {
+			s.handleLogin(w, r)
+			return
+		}
+		if s.hasValidSession(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method == http.MethodGet {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+			w.Write(loginHTML)
+			return
+		}
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+	})
+}
+
+func (s *Server) hasValidSession(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	expiry, ok := s.sessions[c.Value]
+	if !ok {
+		return false
+	}
+	if time.Now().After(expiry) {
+		delete(s.sessions, c.Value)
+		return false
+	}
+	return true
+}
+
+type loginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Key      string `json:"key"`
+}
+
+// handleLogin is intentionally reachable without a session (it's how one
+// gets created) but is otherwise not registered on s.mux — authMiddleware
+// intercepts POST /login before the router ever sees it, so it works
+// regardless of what routes() does or doesn't register.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var req loginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// subtle.ConstantTimeCompare avoids a timing side-channel on credential
+	// comparison; all three must match, and constant-time comparison of the
+	// full request happens regardless of which field first differs.
+	ok := subtle.ConstantTimeCompare([]byte(req.Username), []byte(s.LoginUsername)) == 1
+	ok = subtle.ConstantTimeCompare([]byte(req.Password), []byte(s.LoginPassword)) == 1 && ok
+	ok = subtle.ConstantTimeCompare([]byte(req.Key), []byte(s.LoginKey)) == 1 && ok
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "invalid credentials")
+		return
+	}
+
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create session")
+		return
+	}
+	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+
+	s.mu.Lock()
+	s.sessions[token] = time.Now().Add(sessionTTL)
+	s.mu.Unlock()
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookieName,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(sessionTTL.Seconds()),
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("GET /", s.handleDashboard)
@@ -195,8 +345,14 @@ func (s *Server) peekLedger(strategyID string) (*portfolio.Ledger, bool) {
 
 func (s *Server) setStatus(strategyID, status string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.lastStatus[strategyID] = status
+	s.mu.Unlock()
+	// Persisted so AutoResumeAll can restore this after a process restart —
+	// scheduler.Engine's runtime map (and this in-memory lastStatus map)
+	// don't survive a redeploy, but the DB does.
+	if err := s.Strategies.SetDesiredStatus(strategyID, status); err != nil {
+		s.Logs.Insert(strategyID, "error", "failed to persist desired_status: "+err.Error())
+	}
 }
 
 // statusOf prefers the live runtime's state (authoritative while it
@@ -214,12 +370,13 @@ func (s *Server) statusOf(strategyID string) string {
 	return "not_started"
 }
 
-func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+// startStrategy is handleRun's actual work, factored out so AutoResumeAll
+// (called once at boot, no HTTP request in play) can reuse the exact same
+// ledger/hooks/RunStrategy wiring instead of duplicating it.
+func (s *Server) startStrategy(id string) error {
 	strat, _, err := s.Strategies.GetLatestVersion(id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "strategy not found")
-		return
+		return fmt.Errorf("strategy not found: %w", err)
 	}
 
 	ledger := s.getLedger(id)
@@ -239,16 +396,9 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	rt, err := s.Engine.RunStrategy(strat, ledger, s.Broker, hooks)
-	if err != nil {
-		if err == scheduler.ErrConcurrencyLimitReached {
-			writeError(w, http.StatusTooManyRequests, "concurrency_limit_reached")
-			return
-		}
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
+	if _, err := s.Engine.RunStrategy(strat, ledger, s.Broker, hooks); err != nil {
+		return err
 	}
-	_ = rt
 	now := time.Now().UTC()
 	if err := s.Strategies.SetFirstRunAt(id, now); err != nil {
 		s.Logs.Insert(id, "error", "failed to record first_run_at: "+err.Error())
@@ -256,8 +406,54 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	if err := s.Strategies.SetLastRunAt(id, now); err != nil {
 		s.Logs.Insert(id, "error", "failed to record last_run_at: "+err.Error())
 	}
+	return nil
+}
+
+func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.startStrategy(id); err != nil {
+		if err == scheduler.ErrConcurrencyLimitReached {
+			writeError(w, http.StatusTooManyRequests, "concurrency_limit_reached")
+			return
+		}
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	s.setStatus(id, "running")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "running"})
+}
+
+// AutoResumeAll restores whatever was actually running/paused before the
+// process last stopped — called once at boot, before the HTTP port is
+// reachable (see cmd/engine/main.go). scheduler.Engine's runtime map is
+// pure in-memory, so without this every redeploy would silently drop every
+// strategy back to not_started until someone noticed and clicked Run.
+// A strategy explicitly stopped (or never started) is left alone — only
+// "running"/"paused" are restored, since auto-starting a deliberately
+// stopped strategy would override a real decision, not recover from one.
+func (s *Server) AutoResumeAll() {
+	ids, err := s.Strategies.ListStrategyIDs()
+	if err != nil {
+		s.Logs.Insert("system", "error", "AutoResumeAll: failed to list strategies: "+err.Error())
+		return
+	}
+	for _, id := range ids {
+		desired, err := s.Strategies.GetDesiredStatus(id)
+		if err != nil || (desired != "running" && desired != "paused") {
+			continue
+		}
+		if err := s.startStrategy(id); err != nil {
+			s.Logs.Insert(id, "error", "AutoResumeAll: failed to restart: "+err.Error())
+			continue
+		}
+		if desired == "paused" {
+			if err := s.Engine.PauseStrategy(id); err != nil {
+				s.Logs.Insert(id, "error", "AutoResumeAll: failed to re-pause: "+err.Error())
+				continue
+			}
+		}
+		s.Logs.Insert(id, "info", "AutoResumeAll: restored to "+desired+" after process restart")
+	}
 }
 
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
