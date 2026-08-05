@@ -25,6 +25,14 @@ class AgentState(TypedDict, total=False):
 
     # gather_context
     decision_context: dict
+    # Structural fingerprints of what's already deployed (nodes/
+    # gather_context.py) — deployed_entry_signatures feeds intraday's
+    # quick_filter.py, deployed_archetype_names feeds swing's plan.py
+    # _avoid_archetypes. Never part of the API response (_result_payload
+    # in api.py only extracts specific known keys), purely an internal
+    # planning input for this run.
+    deployed_entry_signatures: set
+    deployed_archetype_names: set
 
     # plan — swing: {candidates: [{archetype, risk, holding_days, rationale}], research_needed, research_queries}
     # intraday: DimensionSelectionPlan shape (nodes/schemas.py) — trend_filters/

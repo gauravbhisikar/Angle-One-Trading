@@ -97,6 +97,34 @@ def run_backtest(dsl: dict, candles_by_timeframe: dict, starting_capital: float 
     return r.json()
 
 
+def list_deployed_dsls() -> list:
+    """Every currently-deployed strategy's raw DSL — used only to stop
+    generation from proposing a structural duplicate of what's already
+    live (see nodes/gather_context.py). Best-effort: a strategy whose DSL
+    fetch fails is skipped rather than aborting the whole call, since this
+    is an input to a heuristic filter, not something generation should
+    hard-fail over."""
+    try:
+        r = _client.get(f"{ENGINE_URL}/strategies")
+        r.raise_for_status()
+        summaries = r.json() or []
+    except httpx.HTTPError:
+        return []
+
+    dsls = []
+    for s in summaries:
+        strategy_id = s.get("strategy_id")
+        if not strategy_id:
+            continue
+        try:
+            r = _client.get(f"{ENGINE_URL}/strategies/{strategy_id}/dsl")
+            r.raise_for_status()
+            dsls.append(r.json())
+        except httpx.HTTPError:
+            continue
+    return dsls
+
+
 def create_strategy(dsl: dict) -> dict:
     r = _client.post(f"{ENGINE_URL}/strategies", json=dsl)
     r.raise_for_status()

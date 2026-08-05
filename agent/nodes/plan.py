@@ -19,10 +19,12 @@ tier (and holding period, for swing) for each, based on the given market context
 genuinely different candidates — never just one — so they can be backtested and compared in a real tournament;
 a single-candidate "plan" defeats the whole point of ranking.
 
-An avoid-list will be given, built from this project's own real trade history (not a guess): an archetype on
-it has been tried at least 5 times in this style and succeeded (survived quality gates) less than 35% of the
-time. Do not propose an avoid-listed archetype unless something in the CURRENT context gives you a specific,
-stated reason to think this time is different — never include it silently as if its history didn't happen.
+An avoid-list will be given, built from two sources: (1) this project's own real trade history — an archetype
+tried at least 5 times in this style and succeeded (survived quality gates) less than 35% of the time, and
+(2) archetypes ALREADY DEPLOYED right now (flagged "deployed": true, not a performance judgment — proposing it
+again would just be a duplicate of a strategy already running, not a new idea). Do not propose an avoid-listed
+archetype unless something in the CURRENT context gives you a specific, stated reason to think this time is
+different — never include it silently as if its history (or its live duplicate) didn't happen.
 
 Only set research_needed=true if something in the context is genuinely unusual or conflicting (e.g. elevated
 VIX with no clear driver, signals disagreeing with each other) that a curated news/RBI feed could clarify.
@@ -78,8 +80,12 @@ def _avoid_archetypes(state: AgentState, archetype_list: list, style: str) -> li
     lessons = dc.get("lessons") or []
     by_key = {l.get("key"): l for l in lessons if isinstance(l, dict) and l.get("key")}
     regime = (dc.get("regime") or {}).get("regime") or None
+    deployed = state.get("deployed_archetype_names") or set()
     avoid = []
     for a in archetype_list:
+        if a in deployed:
+            avoid.append({"archetype": a, "deployed": True})
+            continue  # already flagged for the deployed reason — history doesn't add anything new here
         lesson, is_regime_specific = _lesson_for(by_key, a, style, regime)
         if not lesson:
             continue

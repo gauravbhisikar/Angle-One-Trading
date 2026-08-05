@@ -6,6 +6,7 @@ from collections import defaultdict
 
 from state import AgentState
 from nodes.dimensions import TREND_FILTERS, ENTRY_TRIGGERS, CONFIRMATIONS
+from dsl_utils import rule_signature
 
 DEFAULT_TARGET_COUNT = 45
 
@@ -18,35 +19,29 @@ DEFAULT_TARGET_COUNT = 45
 _INCOMPATIBLE_STYLE_PAIRS = [frozenset({"trend", "mean_reversion"})]
 
 
-def _leaf_signature(rule):
-    """A hashable, rounded canonical form of one rule fragment — collapses
-    float-precision/key-ordering noise, not full semantic equivalence."""
-    if rule is None:
-        return None
-    compare_to = None
-    if rule.get("compare_to"):
-        compare_to = rule["compare_to"].get("indicator")
-    extra = tuple(sorted(
-        (k, round(v, 4) if isinstance(v, (int, float)) else v)
-        for k, v in rule.items()
-        if k not in ("indicator", "operator", "value", "compare_to")
-    ))
-    return (rule.get("indicator"), rule.get("operator"), rule.get("value"), compare_to, extra)
-
-
-def _spec_signature(spec: dict):
-    """A set-based signature of a spec's effective entry leaves plus its
-    exit/risk choice. Using a SET (not a list/tuple) means a spec whose
-    trend_filter and confirmation happen to resolve to the identical rule
-    naturally collapses to the same signature as the equivalent spec using
-    only one of them — no separate "redundant leaf" special case needed."""
+def _entry_leaf_signature(spec: dict) -> frozenset:
+    """A set-based signature of a spec's effective ENTRY leaves only (trend
+    filter + entry trigger + confirmation — no exit/risk). Using a SET
+    (not a list/tuple) means a spec whose trend_filter and confirmation
+    happen to resolve to the identical rule naturally collapses to the
+    same signature as the equivalent spec using only one of them — no
+    separate "redundant leaf" special case needed. Also directly
+    comparable against dsl_utils.entry_leaf_signature() on a real deployed
+    DSL, since both walk down to the same rule_signature() leaves."""
     rules = [ENTRY_TRIGGERS[spec["entry_trigger"]]["rule"]]
     if spec["trend_filter"] != "none":
         rules.append(TREND_FILTERS[spec["trend_filter"]]["rule"])
     if spec["confirmation"] != "none":
         rules.append(CONFIRMATIONS[spec["confirmation"]]["rule"])
-    leaf_sigs = frozenset(_leaf_signature(r) for r in rules)
-    return leaf_sigs | {("exit", spec["exit_style"]), ("risk", spec["risk_tier"])}
+    return frozenset(rule_signature(r) for r in rules)
+
+
+def _spec_signature(spec: dict):
+    """_entry_leaf_signature plus the exit/risk choice — used for
+    within-batch structural dedup (see _dedupe_structural), where two
+    different risk tiers of the same entry are legitimately distinct
+    candidates worth backtesting separately."""
+    return _entry_leaf_signature(spec) | {("exit", spec["exit_style"]), ("risk", spec["risk_tier"])}
 
 
 def _dedupe_structural(specs: list) -> list:
@@ -120,14 +115,28 @@ def _diverse_topn(specs: list, target_count: int) -> list:
     return survivors[:target_count]
 
 
-def quick_filter(raw_specs: list, target_count: int = DEFAULT_TARGET_COUNT) -> list:
+def _not_already_deployed(specs: list, deployed_entry_signatures) -> list:
+    """Drops any spec whose entry-only signature exactly matches a
+    currently-deployed strategy's — stops generation from proposing
+    something that structurally duplicates what's already live, on top of
+    the within-batch dedup above (see gather_context.py for where
+    deployed_entry_signatures comes from)."""
+    if not deployed_entry_signatures:
+        return specs
+    deployed = set(deployed_entry_signatures)
+    return [s for s in specs if _entry_leaf_signature(s) not in deployed]
+
+
+def quick_filter(raw_specs: list, target_count: int = DEFAULT_TARGET_COUNT, deployed_entry_signatures=None) -> list:
     deduped = _dedupe_structural(raw_specs)
     compatible = [s for s in deduped if _is_compatible(s)]
-    return _diverse_topn(compatible, target_count)
+    fresh = _not_already_deployed(compatible, deployed_entry_signatures)
+    return _diverse_topn(fresh, target_count)
 
 
 def quick_filter_node(state: AgentState) -> dict:
     """Graph node — filters expand_node's raw specs down to a backtest-able
     count before generate_dsl builds real DSL for each survivor."""
     raw_specs = state.get("raw_specs") or []
-    return {"candidate_specs": quick_filter(raw_specs)}
+    deployed = state.get("deployed_entry_signatures") or []
+    return {"candidate_specs": quick_filter(raw_specs, deployed_entry_signatures=deployed)}
