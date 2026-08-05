@@ -323,14 +323,78 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getLedger(strategyID string) *portfolio.Ledger {
+	l, _ := s.getOrCreateLedger(strategyID)
+	return l
+}
+
+// getOrCreateLedger is getLedger plus whether THIS call is what created
+// it — startStrategy uses that to know whether it must replay this
+// strategy's persisted trade history before resuming. s.ledgers is pure
+// in-memory (wiped every process restart, unlike the DB), so a freshly
+// created ledger always starts at full starting capital with zero
+// holdings — correct for a strategy that's genuinely never traded, wrong
+// for one a redeploy just interrupted mid-position.
+func (s *Server) getOrCreateLedger(strategyID string) (*portfolio.Ledger, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	l, ok := s.ledgers[strategyID]
-	if !ok {
-		l = portfolio.NewLedger(s.DefaultStartingCapital)
-		s.ledgers[strategyID] = l
+	if ok {
+		return l, false
 	}
-	return l
+	l = portfolio.NewLedger(s.DefaultStartingCapital)
+	s.ledgers[strategyID] = l
+	return l, true
+}
+
+// tradeStillOpen reports whether a persisted trade never got a real sell
+// applied — CLOSED/STOPPED/TARGET_HIT all closed the position; EXPIRED
+// (swing's max-holding-days marker, see strategy/lifecycle.go's
+// manageOpenTrade) explicitly does NOT close it, the position is still
+// genuinely held.
+func tradeStillOpen(state models.TradeState) bool {
+	return state == models.TradeActive || state == models.TradeOpen || state == models.TradeExpired
+}
+
+// replayTrades reconstructs a freshly-created ledger's cash/holdings by
+// replaying a strategy's ENTIRE persisted trade history through the exact
+// same Ledger.ApplyBuy/ApplySell calls the live path uses (never a
+// separate accounting formula, so there's only one place that can be
+// wrong), then restores any still-open trade into the runtime so
+// OnCandleClose manages it (checks exits) instead of silently forgetting
+// it exists and trying to open a second position on top of it. A pure
+// function of (trades, ledger, rt) — no DB access — so it's unit-testable
+// without a real Server/storage stack.
+//
+// For a CLOSED trade, the persisted Costs field is entry+exit combined
+// (lifecycle.go adds the exit leg's cost on top of the entry leg's at
+// close time) — charging the full amount on the replayed buy and zero on
+// the replayed sell nets to the identical final cash balance as the real
+// entry/exit split would have (verified: Ledger's cash formula only cares
+// about the total debited across both legs, and ApplySell's realized-PnL
+// calc doesn't depend on the costs argument at all).
+func replayTrades(trades []models.Trade, ledger *portfolio.Ledger, rt *strategy.Runtime) error {
+	for _, t := range trades {
+		if err := ledger.ApplyBuy(t.Symbol, t.Quantity, t.EntryPrice, t.Costs); err != nil {
+			return fmt.Errorf("replay entry for trade %s: %w", t.ID, err)
+		}
+		if tradeStillOpen(t.State) {
+			trade := t
+			rt.RestoreOpenTrade(t.Symbol, &trade)
+			continue
+		}
+		if _, err := ledger.ApplySell(t.Symbol, t.Quantity, t.ExitPrice, decimal.Zero); err != nil {
+			return fmt.Errorf("replay exit for trade %s: %w", t.ID, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) replayLedgerAndRuntime(id string, strat *dsl.Strategy, ledger *portfolio.Ledger, rt *strategy.Runtime) error {
+	trades, err := s.Trades.ListByStrategy(strat.StrategyID, strat.StrategyVersion)
+	if err != nil {
+		return err
+	}
+	return replayTrades(trades, ledger, rt)
 }
 
 // peekLedger reads an existing ledger without creating one — used by
@@ -379,7 +443,7 @@ func (s *Server) startStrategy(id string) error {
 		return fmt.Errorf("strategy not found: %w", err)
 	}
 
-	ledger := s.getLedger(id)
+	ledger, freshlyCreated := s.getOrCreateLedger(id)
 	hooks := strategy.Hooks{
 		OnOrder: func(o models.Order) {
 			if err := s.Orders.Insert(o); err != nil {
@@ -396,8 +460,14 @@ func (s *Server) startStrategy(id string) error {
 		},
 	}
 
-	if _, err := s.Engine.RunStrategy(strat, ledger, s.Broker, hooks); err != nil {
+	rt, err := s.Engine.RunStrategy(strat, ledger, s.Broker, hooks)
+	if err != nil {
 		return err
+	}
+	if freshlyCreated {
+		if err := s.replayLedgerAndRuntime(id, strat, ledger, rt); err != nil {
+			s.Logs.Insert(id, "error", "failed to reconstruct ledger/position state from trade history: "+err.Error())
+		}
 	}
 	now := time.Now().UTC()
 	if err := s.Strategies.SetFirstRunAt(id, now); err != nil {

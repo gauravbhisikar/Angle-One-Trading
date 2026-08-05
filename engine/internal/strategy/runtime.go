@@ -86,6 +86,22 @@ func (rt *Runtime) OpenPositionCount() int {
 	return int(atomic.LoadInt32(&rt.openCount))
 }
 
+// RestoreOpenTrade seeds a freshly-constructed Runtime with a trade that
+// was already open before this process started — without this, a
+// restarted engine (redeploy, crash) has no memory of it: OnCandleClose
+// would call tryEntry (not manageOpenTrade) for that symbol, silently
+// abandoning the real position (never exits, take-profit/stop-loss never
+// checked again) and risking a second, duplicate entry on top of it. Must
+// be called once per symbol, before the engine starts processing candles
+// for this runtime again (see api.Server.startStrategy). Not meant for
+// any other caller — a live Runtime already tracks this itself in
+// tryEntry.
+func (rt *Runtime) RestoreOpenTrade(symbol string, trade *models.Trade) {
+	rt.trades[symbol] = trade
+	rt.entryTime[symbol] = trade.EntryTime
+	atomic.AddInt32(&rt.openCount, 1)
+}
+
 func NewRuntime(s *dsl.Strategy, deps Deps) *Runtime {
 	if deps.Now == nil {
 		deps.Now = time.Now
