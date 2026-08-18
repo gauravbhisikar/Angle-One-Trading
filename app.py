@@ -20,6 +20,7 @@ import hmac
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -38,6 +39,24 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 REFRESH_SECONDS = 60
 PORT = int(os.environ.get("DASHBOARD_PORT", "9080"))
 TZ_IST = timedelta(hours=5, minutes=30)
+
+
+def _git_commit():
+    """Short commit hash this process is actually running, so the UI can
+    show a build stamp — the fastest way to tell "did my deploy actually
+    take" apart from "browser cached the old page"."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL, timeout=5,
+        ).decode().strip()
+    except Exception:
+        return "unknown"
+
+
+BUILD_COMMIT = _git_commit()
+BUILD_STARTED = None  # set in main(), IST timestamp string
 
 # --------------------------------------------------------------------------
 # .env loading (no dotenv dependency)
@@ -746,6 +765,8 @@ def build_market():
         "refresh_seconds": REFRESH_SECONDS,
         "checks": checks,
         "cards": cards,
+        "build": BUILD_COMMIT,
+        "build_started": BUILD_STARTED,
     }
 
 
@@ -830,7 +851,8 @@ class Handler(BaseHTTPRequestHandler):
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
                             "market": market_info(),
                             "refresh_seconds": REFRESH_SECONDS,
-                            "checks": [], "cards": []}
+                            "checks": [], "cards": [],
+                            "build": BUILD_COMMIT, "build_started": BUILD_STARTED}
             body = json.dumps(snap).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
         elif path == "/health":
@@ -840,10 +862,12 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    global BUILD_STARTED
+    BUILD_STARTED = ist_now().strftime("%Y-%m-%d %H:%M:%S")
     threading.Thread(target=_refresh_loop, daemon=True).start()
     threading.Thread(target=_autoreload_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"Pre-market dashboard on http://localhost:{PORT}")
+    print(f"Pre-market dashboard on http://localhost:{PORT} (build {BUILD_COMMIT}, started {BUILD_STARTED} IST)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

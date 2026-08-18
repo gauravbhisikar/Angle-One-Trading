@@ -78,6 +78,10 @@
 
   .meta-sep { width: 1px; height: 14px; background: var(--line); }
   #lastUpdated, #countdown { font-family: var(--mono); font-size: 11px; }
+  .buildtag {
+    font-family: var(--mono); font-size: 10px; color: var(--faint);
+    background: var(--surface2); padding: 2px 8px; border-radius: 999px;
+  }
 
   button.icon {
     background: none; border: 1px solid var(--line); border-radius: 999px;
@@ -287,6 +291,7 @@
     <div class="hmeta">
       <span class="pill" id="marketPill">…</span>
       <span id="lastUpdated">—</span>
+      <span id="buildTag" class="buildtag" title="git commit this server is running">—</span>
       <span class="meta-sep"></span>
       <span id="countdown"></span>
       <label class="switch" id="liveSwitch">
@@ -512,6 +517,8 @@ async function load() {
     pill.textContent = d.market.open ? "NSE OPEN" : "NSE " + (d.market.state || "").toUpperCase();
     pill.className = "pill " + (d.market.open ? "open" : "closed");
     document.getElementById("lastUpdated").textContent = "updated " + d.generated_at + " IST";
+    document.getElementById("buildTag").textContent =
+      "build " + (d.build || "?") + (d.build_started ? " · up since " + d.build_started : "");
     renderBanner(d.market);
 
     const checks = d.checks || [];
