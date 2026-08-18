@@ -167,6 +167,12 @@
     background: var(--down-bg); border: 1px solid color-mix(in srgb, var(--down) 30%, transparent);
     color: var(--down); padding: 10px 16px; border-radius: 10px; font-size: 13px; margin-bottom: 16px;
   }
+  .warnbanner {
+    background: var(--amber-bg); border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent);
+    color: var(--amber); padding: 10px 16px; border-radius: 10px; font-size: 12px; margin-bottom: 16px;
+    font-family: var(--mono); line-height: 1.6;
+  }
+  .warnbanner .wline { display: block; }
 
   .summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
   .schip {
@@ -314,6 +320,7 @@
 
 <main>
   <div class="errbanner" id="errBanner" style="display:none"></div>
+  <div id="warnBanner" class="warnbanner" style="display:none"></div>
   <div id="marketBanner" class="banner" style="display:none"></div>
 
   <div id="panel-analysis">
@@ -520,6 +527,15 @@ async function load() {
     document.getElementById("buildTag").textContent =
       "build " + (d.build || "?") + (d.build_started ? " · up since " + d.build_started : "");
     renderBanner(d.market);
+
+    const warnBanner = document.getElementById("warnBanner");
+    const warnings = d.warnings || [];
+    if (warnings.length) {
+      warnBanner.innerHTML = "⚠ " + warnings.map(w => `<span class="wline">${esc(w)}</span>`).join("");
+      warnBanner.style.display = "block";
+    } else {
+      warnBanner.style.display = "none";
+    }
 
     const checks = d.checks || [];
     document.getElementById("checks").innerHTML = checks.map(checkCardHTML).join("");

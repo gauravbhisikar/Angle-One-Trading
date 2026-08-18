@@ -457,6 +457,10 @@ def build_market():
     cards = []
     raw = {}          # id -> {"value", "chg", "source", "extra"}
     checks = []
+    warnings = []     # user-visible "X failed, fell back to Y" trail — shown as a banner
+
+    def note_fail(label, exc, fell_back_to):
+        warnings.append(f"{label} failed ({exc!r}) — using {fell_back_to} instead")
 
     def add(card):
         cards.append(card)
@@ -514,47 +518,55 @@ def build_market():
         ltp, prev = angelone_live_and_prev("NSE", "India VIX", "99926017")
         quote_card("vix", "India VIX", "Angel One", ltp, pick_change(ltp, prev),
                    f"prev close {fnum(prev)}")
-    except Exception:
+    except Exception as e1:
         try:
             ns = nse_vix_and_nifty()
             v = ns["vix"]
             quote_card("vix", "India VIX", "NSE", v["price"], v["chg"],
                        f"absolute change {fnum(v['chg_abs'], 2)}" if v.get("chg_abs") is not None else "")
-        except Exception:
+            note_fail("Angel One (VIX)", e1, "NSE")
+        except Exception as e2:
             try:
                 y = yahoo_chart("^INDIAVIX", "5d")
                 prev = y["prev"] or (y["rows"][-2]["close"] if len(y["rows"]) > 1 else None)
                 quote_card("vix", "India VIX", "Yahoo", y["price"],
                            pick_change(y["price"], prev), "fallback source")
-            except Exception:
+                note_fail("Angel One (VIX)", e1, "Yahoo")
+                note_fail("NSE (VIX)", e2, "Yahoo")
+            except Exception as e3:
                 add({"id": "vix", "title": "India VIX", "value": "—", "change": None,
                      "change_text": "unavailable", "detail": "Angel One/NSE/Yahoo all failed", "source": "NSE",
                      "updated": ""})
+                warnings.append(f"India VIX unavailable — Angel One {e1!r}, NSE {e2!r}, Yahoo {e3!r}")
 
     # --- Live NIFTY 50 (Angel One primary, NSE then Yahoo fallback) ---
     try:
         ltp, prev = angelone_live_and_prev("NSE", "Nifty 50", "99926000")
         quote_card("nifty_live", "NIFTY 50", "Angel One", ltp, pick_change(ltp, prev),
                    f"prev close {fnum(prev)}")
-    except Exception:
+    except Exception as e1:
         try:
             ns = nse_vix_and_nifty()
             nl = ns["nifty"]
             if nl and nl.get("price") is not None:
                 quote_card("nifty_live", "NIFTY 50", "NSE", nl["price"], nl["chg"],
                            f"absolute change {fnum(nl['chg_abs'], 2)}" if nl.get("chg_abs") is not None else "")
+                note_fail("Angel One (NIFTY)", e1, "NSE")
             else:
                 raise RuntimeError("nse: no nifty price")
-        except Exception:
+        except Exception as e2:
             try:
                 y = yahoo_chart("^NSEI", "5d")
                 prev = y["prev"] or (y["rows"][-2]["close"] if len(y["rows"]) > 1 else None)
                 quote_card("nifty_live", "NIFTY 50", "Yahoo", y["price"],
                            pick_change(y["price"], prev), "fallback source")
-            except Exception:
+                note_fail("Angel One (NIFTY)", e1, "Yahoo")
+                note_fail("NSE (NIFTY)", e2, "Yahoo")
+            except Exception as e3:
                 add({"id": "nifty_live", "title": "NIFTY 50", "value": "—", "change": None,
                      "change_text": "unavailable", "detail": "Angel One/NSE/Yahoo all failed", "source": "NSE",
                      "updated": ""})
+                warnings.append(f"NIFTY 50 unavailable — Angel One {e1!r}, NSE {e2!r}, Yahoo {e3!r}")
 
     # --- Commodities & FX ---
     try:
@@ -775,6 +787,7 @@ def build_market():
         "refresh_seconds": REFRESH_SECONDS,
         "checks": checks,
         "cards": cards,
+        "warnings": warnings,
         "build": BUILD_COMMIT,
         "build_started": BUILD_STARTED,
     }
