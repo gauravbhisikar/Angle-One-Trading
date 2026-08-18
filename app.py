@@ -235,7 +235,10 @@ def get_totp(secret, window=30, digits=6):
     return str(code % (10 ** digits)).zfill(digits)
 
 
-def angelone_historical():
+# Angel One session is short-lived (~a few requests/sec rate limit, daily
+# token expiry) — re-login every call rather than caching across the
+# 60s refresh cycle; simplest thing that can't go stale mid-session.
+def angelone_login():
     api_key = os.environ["ANGLE_ONE_API_KEY"]
     client = os.environ["ANGLE_ONE_CLIENT_CODE"]
     pin = os.environ["ANGLE_ONE_PIN"]
@@ -251,12 +254,15 @@ def angelone_historical():
     token = (login.get("data") or {}).get("jwtToken")
     if not token:
         raise RuntimeError("angelone: login failed")
-    headers = dict(base_headers, Authorization=f"Bearer {token}")
+    return dict(base_headers, Authorization=f"Bearer {token}")
+
+
+def angelone_candles(headers, exchange, symboltoken, days=30):
     to = date.today()
-    fr = to - timedelta(days=30)
+    fr = to - timedelta(days=days)
     hist = http_post_json(
         "https://apiconnect.angelbroking.com/rest/secure/angelbroking/historical/v1/getCandleData",
-        {"exchange": "NSE", "symboltoken": "99926000", "interval": "ONE_DAY",
+        {"exchange": exchange, "symboltoken": symboltoken, "interval": "ONE_DAY",
          "fromdate": fr.strftime("%Y-%m-%d 09:15"), "todate": to.strftime("%Y-%m-%d 15:30")},
         headers=headers, timeout=20)
     rows = hist.get("data") or []
@@ -268,6 +274,45 @@ def angelone_historical():
     if not parsed:
         raise RuntimeError("angelone: no rows")
     return parsed
+
+
+def angelone_historical():
+    return angelone_candles(angelone_login(), "NSE", "99926000")
+
+
+def angelone_ltp(exchange, tradingsymbol, symboltoken):
+    """Live last-traded-price for one instrument, via Angel One's own feed —
+    preferred over scraping NSE/Yahoo wherever Angel One carries the
+    instrument, since it's the same authenticated broker feed the trading
+    engine itself trades against."""
+    headers = angelone_login()
+    q = http_post_json(
+        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/getLtpData",
+        {"exchange": exchange, "tradingsymbol": tradingsymbol, "symboltoken": symboltoken},
+        headers=headers, timeout=15)
+    ltp = (q.get("data") or {}).get("ltp")
+    if ltp is None:
+        raise RuntimeError("angelone: no ltp in response")
+    return float(ltp)
+
+
+def angelone_live_and_prev(exchange, tradingsymbol, symboltoken):
+    """Live LTP + prior trading day's close (for a %-change figure) in one
+    Angel One session — one login shared by both calls."""
+    headers = angelone_login()
+    q = http_post_json(
+        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/getLtpData",
+        {"exchange": exchange, "tradingsymbol": tradingsymbol, "symboltoken": symboltoken},
+        headers=headers, timeout=15)
+    ltp = (q.get("data") or {}).get("ltp")
+    if ltp is None:
+        raise RuntimeError("angelone: no ltp in response")
+    rows = angelone_candles(headers, exchange, symboltoken, days=10)
+    rows.sort(key=lambda r: r["date"])
+    today = ist_now().date().isoformat()
+    prev_rows = [r for r in rows if r["date"] < today]
+    prev_close = (prev_rows[-1] if prev_rows else rows[-1])["close"]
+    return float(ltp), prev_close
 
 
 # --- Aggregations ----------------------------------------------------------
@@ -435,39 +480,52 @@ def build_market():
         quote_card(cid, title, src, cur, chg,
                    f"prev close {fnum(prev)}" if prev else "")
 
-    # --- India VIX + live NIFTY 50 (NSE, Yahoo fallback) ---
-    vix_src = "NSE"
-    ns = None
+    # --- India VIX (Angel One primary, NSE then Yahoo fallback) ---
     try:
-        ns = nse_vix_and_nifty()
-        v = ns["vix"]
-        quote_card("vix", "India VIX", vix_src, v["price"], v["chg"],
-                   f"absolute change {fnum(v['chg_abs'], 2)}" if v.get("chg_abs") is not None else "")
+        ltp, prev = angelone_live_and_prev("NSE", "India VIX", "99926017")
+        quote_card("vix", "India VIX", "Angel One", ltp, pick_change(ltp, prev),
+                   f"prev close {fnum(prev)}")
     except Exception:
         try:
-            y = yahoo_chart("^INDIAVIX", "5d")
-            prev = y["prev"] or (y["rows"][-2]["close"] if len(y["rows"]) > 1 else None)
-            quote_card("vix", "India VIX", "Yahoo", y["price"],
-                       pick_change(y["price"], prev), "fallback source")
+            ns = nse_vix_and_nifty()
+            v = ns["vix"]
+            quote_card("vix", "India VIX", "NSE", v["price"], v["chg"],
+                       f"absolute change {fnum(v['chg_abs'], 2)}" if v.get("chg_abs") is not None else "")
         except Exception:
-            add({"id": "vix", "title": "India VIX", "value": "—", "change": None,
-                 "change_text": "unavailable", "detail": "NSE/Yahoo both failed", "source": "NSE",
-                 "updated": ""})
+            try:
+                y = yahoo_chart("^INDIAVIX", "5d")
+                prev = y["prev"] or (y["rows"][-2]["close"] if len(y["rows"]) > 1 else None)
+                quote_card("vix", "India VIX", "Yahoo", y["price"],
+                           pick_change(y["price"], prev), "fallback source")
+            except Exception:
+                add({"id": "vix", "title": "India VIX", "value": "—", "change": None,
+                     "change_text": "unavailable", "detail": "Angel One/NSE/Yahoo all failed", "source": "NSE",
+                     "updated": ""})
 
-    nl = ns["nifty"] if ns else None
-    if nl and nl.get("price") is not None:
-        quote_card("nifty_live", "NIFTY 50", "NSE", nl["price"], nl["chg"],
-                   f"absolute change {fnum(nl['chg_abs'], 2)}" if nl.get("chg_abs") is not None else "")
-    else:
+    # --- Live NIFTY 50 (Angel One primary, NSE then Yahoo fallback) ---
+    try:
+        ltp, prev = angelone_live_and_prev("NSE", "Nifty 50", "99926000")
+        quote_card("nifty_live", "NIFTY 50", "Angel One", ltp, pick_change(ltp, prev),
+                   f"prev close {fnum(prev)}")
+    except Exception:
         try:
-            y = yahoo_chart("^NSEI", "5d")
-            prev = y["prev"] or (y["rows"][-2]["close"] if len(y["rows"]) > 1 else None)
-            quote_card("nifty_live", "NIFTY 50", "Yahoo", y["price"],
-                       pick_change(y["price"], prev), "fallback source")
+            ns = nse_vix_and_nifty()
+            nl = ns["nifty"]
+            if nl and nl.get("price") is not None:
+                quote_card("nifty_live", "NIFTY 50", "NSE", nl["price"], nl["chg"],
+                           f"absolute change {fnum(nl['chg_abs'], 2)}" if nl.get("chg_abs") is not None else "")
+            else:
+                raise RuntimeError("nse: no nifty price")
         except Exception:
-            add({"id": "nifty_live", "title": "NIFTY 50", "value": "—", "change": None,
-                 "change_text": "unavailable", "detail": "NSE/Yahoo both failed", "source": "NSE",
-                 "updated": ""})
+            try:
+                y = yahoo_chart("^NSEI", "5d")
+                prev = y["prev"] or (y["rows"][-2]["close"] if len(y["rows"]) > 1 else None)
+                quote_card("nifty_live", "NIFTY 50", "Yahoo", y["price"],
+                           pick_change(y["price"], prev), "fallback source")
+            except Exception:
+                add({"id": "nifty_live", "title": "NIFTY 50", "value": "—", "change": None,
+                     "change_text": "unavailable", "detail": "Angel One/NSE/Yahoo all failed", "source": "NSE",
+                     "updated": ""})
 
     # --- Commodities & FX ---
     try:
