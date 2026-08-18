@@ -93,7 +93,11 @@ def http_json(url, headers=None, timeout=20, jar=None):
         hdrs.update(headers)
     req = urllib.request.Request(url, headers=hdrs)
     with _opener(jar).open(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
+        body = resp.read().decode("utf-8", "replace")
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"non-JSON response: {body[:150]!r}") from None
 
 
 def http_text(url, headers=None, timeout=20, jar=None):
@@ -111,7 +115,11 @@ def http_post_json(url, body, headers=None, timeout=20, jar=None):
         hdrs.update(headers)
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=hdrs, method="POST")
     with _opener(jar).open(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
+        raw = resp.read().decode("utf-8", "replace")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"non-JSON response: {raw[:150]!r}") from None
 
 
 def fnum(value, digits=2, sep=True):
@@ -275,7 +283,9 @@ def angelone_login():
     base_headers = {"X-PrivateKey": api_key,
                     "X-ClientLocalIP": "127.0.0.1",
                     "X-ClientPublicIP": "127.0.0.1",
-                    "X-MACAddress": "00:00:00:00:00:00"}
+                    "X-MACAddress": "00:00:00:00:00:00",
+                    "X-UserType": "USER",
+                    "X-SourceID": "WEB"}
     login = http_post_json(
         "https://apiconnect.angelbroking.com/rest/auth/angelbrokingUser/v1/loginByPassword",
         {"clientcode": client, "password": pin, "totp": get_totp(totp_secret)},
