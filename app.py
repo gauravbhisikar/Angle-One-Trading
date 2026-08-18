@@ -257,11 +257,21 @@ def get_totp(secret, window=30, digits=6):
 # Angel One session is short-lived (~a few requests/sec rate limit, daily
 # token expiry) — re-login every call rather than caching across the
 # 60s refresh cycle; simplest thing that can't go stale mid-session.
+def _env_any(*names):
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            return v
+    raise KeyError(names[0])
+
+
 def angelone_login():
-    api_key = os.environ["ANGLE_ONE_API_KEY"]
-    client = os.environ["ANGLE_ONE_CLIENT_CODE"]
-    pin = os.environ["ANGLE_ONE_PIN"]
-    totp_secret = os.environ["ANGLE_ONE_TOTP_SECRET"]
+    # ANGEL_* matches the Go engine's naming (the real server .env); the
+    # ANGLE_ONE_* names are kept as a fallback for older local setups.
+    api_key = _env_any("ANGEL_API_KEY", "ANGLE_ONE_API_KEY")
+    client = _env_any("ANGEL_CLIENT_ID", "ANGLE_ONE_CLIENT_CODE")
+    pin = _env_any("ANGEL_PIN", "ANGLE_ONE_PIN")
+    totp_secret = _env_any("ANGEL_TOTP_SECRET", "ANGLE_ONE_TOTP_SECRET")
     base_headers = {"X-PrivateKey": api_key,
                     "X-ClientLocalIP": "127.0.0.1",
                     "X-ClientPublicIP": "127.0.0.1",
