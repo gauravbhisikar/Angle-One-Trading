@@ -285,9 +285,15 @@ def angelone_login():
                     "X-ClientPublicIP": "127.0.0.1",
                     "X-MACAddress": "00:00:00:00:00:00",
                     "X-UserType": "USER",
-                    "X-SourceID": "WEB"}
+                    "X-SourceID": "WEB",
+                    # No browser User-Agent here on purpose — claiming to be
+                    # Chrome while urllib's TLS handshake doesn't match one
+                    # is a classic WAF bot-trigger. The working Go engine
+                    # client (connectors/angelone/client.go) never fakes a
+                    # UA either; match its plain-script identity instead.
+                    "User-Agent": "python-urllib/angelone-premarket-dashboard"}
     login = http_post_json(
-        "https://apiconnect.angelbroking.com/rest/auth/angelbrokingUser/v1/loginByPassword",
+        "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword",
         {"clientcode": client, "password": pin, "totp": get_totp(totp_secret)},
         headers=base_headers, timeout=15)
     token = (login.get("data") or {}).get("jwtToken")
@@ -319,33 +325,35 @@ def angelone_historical():
     return angelone_candles(angelone_login(), "NSE", "99926000")
 
 
-def angelone_ltp(exchange, tradingsymbol, symboltoken):
+def angelone_ltp(headers, exchange, symboltoken):
     """Live last-traded-price for one instrument, via Angel One's own feed —
     preferred over scraping NSE/Yahoo wherever Angel One carries the
     instrument, since it's the same authenticated broker feed the trading
-    engine itself trades against."""
-    headers = angelone_login()
+    engine itself trades against.
+
+    Uses the combined market/v1/quote endpoint, not the older
+    order/v1/getLtpData — that older endpoint gets rejected by Angel One's
+    WAF (confirmed: same login/session, same server, getLtpData returns
+    a WAF "Request Rejected" page while market/v1/quote succeeds)."""
     q = http_post_json(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/getLtpData",
-        {"exchange": exchange, "tradingsymbol": tradingsymbol, "symboltoken": symboltoken},
+        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/quote",
+        {"mode": "LTP", "exchangeTokens": {exchange: [symboltoken]}},
         headers=headers, timeout=15)
-    ltp = (q.get("data") or {}).get("ltp")
-    if ltp is None:
-        raise RuntimeError("angelone: no ltp in response")
-    return float(ltp)
+    fetched = ((q.get("data") or {}).get("fetched")) or []
+    if not fetched or fetched[0].get("ltp") is None:
+        raise RuntimeError(f"angelone: no ltp in response ({q!r})")
+    return float(fetched[0]["ltp"])
 
 
-def angelone_live_and_prev(exchange, tradingsymbol, symboltoken):
-    """Live LTP + prior trading day's close (for a %-change figure) in one
-    Angel One session — one login shared by both calls."""
-    headers = angelone_login()
-    q = http_post_json(
-        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/order/v1/getLtpData",
-        {"exchange": exchange, "tradingsymbol": tradingsymbol, "symboltoken": symboltoken},
-        headers=headers, timeout=15)
-    ltp = (q.get("data") or {}).get("ltp")
-    if ltp is None:
-        raise RuntimeError("angelone: no ltp in response")
+def angelone_live_and_prev(headers, exchange, symboltoken):
+    """Live LTP + prior trading day's close (for a %-change figure), given
+    an already-logged-in session. Caller must share one login (via
+    angelone_login()) across every instrument fetched per refresh cycle —
+    Angel One's login endpoint rate-limits rapid successive logins (two
+    logins seconds apart from the same client got the second one 403'd
+    in testing), so logging in once per instrument silently breaks the
+    2nd+ one."""
+    ltp = angelone_ltp(headers, exchange, symboltoken)
     rows = angelone_candles(headers, exchange, symboltoken, days=10)
     rows.sort(key=lambda r: r["date"])
     today = ist_now().date().isoformat()
@@ -523,9 +531,19 @@ def build_market():
         quote_card(cid, title, src, cur, chg,
                    f"prev close {fnum(prev)}" if prev else "")
 
+    # Angel One: log in once, reuse for both VIX and NIFTY below — logging
+    # in separately per instrument gets the 2nd login rate-limited (403).
+    angel_headers = None
+    try:
+        angel_headers = angelone_login()
+    except Exception:
+        pass
+
     # --- India VIX (Angel One primary, NSE then Yahoo fallback) ---
     try:
-        ltp, prev = angelone_live_and_prev("NSE", "India VIX", "99926017")
+        if angel_headers is None:
+            raise RuntimeError("angelone: no session (login failed)")
+        ltp, prev = angelone_live_and_prev(angel_headers, "NSE", "99926017")
         quote_card("vix", "India VIX", "Angel One", ltp, pick_change(ltp, prev),
                    f"prev close {fnum(prev)}")
     except Exception as e1:
@@ -549,9 +567,15 @@ def build_market():
                      "updated": ""})
                 warnings.append(f"India VIX unavailable — Angel One {e1!r}, NSE {e2!r}, Yahoo {e3!r}")
 
+    if angel_headers is not None:
+        time.sleep(1)  # Angel One rate-limits to ~1 req/sec; back-to-back
+                        # instrument fetches otherwise 403 the 2nd one.
+
     # --- Live NIFTY 50 (Angel One primary, NSE then Yahoo fallback) ---
     try:
-        ltp, prev = angelone_live_and_prev("NSE", "Nifty 50", "99926000")
+        if angel_headers is None:
+            raise RuntimeError("angelone: no session (login failed)")
+        ltp, prev = angelone_live_and_prev(angel_headers, "NSE", "99926000")
         quote_card("nifty_live", "NIFTY 50", "Angel One", ltp, pick_change(ltp, prev),
                    f"prev close {fnum(prev)}")
     except Exception as e1:
