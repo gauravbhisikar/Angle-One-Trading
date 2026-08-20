@@ -288,7 +288,9 @@
   .hc-val { font-size: 18px; font-weight: 700; font-family: var(--mono); color: var(--accent); }
   .hc-dist { font-size: 11.5px; font-family: var(--mono); }
   .hc-dist.up { color: var(--up); }
-  .hc-dist.down { color: var(--down); }
+  .hc-dist.down { color: var(--down); font-weight: 600; }
+  .hc-dist.breakout { color: var(--accent); font-weight: 600; }
+  .hc-dist.muted { color: var(--muted); }
   .bias {
     border-radius: 14px; padding: 16px 18px; margin-bottom: 16px;
     border: 1px solid var(--line); background: var(--surface);
@@ -535,8 +537,12 @@ function niftyLadderHTML(c, title) {
     <div class="hladder-current">
       <span class="hc-label">Current (GIFT)</span>
       <span class="hc-val">${fmtPrice(current)}</span>
-      <span class="hc-dist ${supDist >= 0 ? "up" : "down"}">${supDist >= 0 ? "▲" : "▼"} ${fmtPrice(Math.abs(supDist))} vs Support</span>
-      <span class="hc-dist ${resDist >= 0 ? "up" : "down"}">${resDist >= 0 ? "▲" : "▼"} ${fmtPrice(Math.abs(resDist))} vs Resistance</span>
+      <span class="hc-dist ${supDist >= 0 ? "up" : "down"}">${supDist >= 0
+        ? `▲ ${fmtPrice(supDist)} pts above Support`
+        : `▼ ${fmtPrice(Math.abs(supDist))} pts BELOW Support — broken down`}</span>
+      <span class="hc-dist ${resDist >= 0 ? "breakout" : "muted"}">${resDist >= 0
+        ? `▲ ${fmtPrice(resDist)} pts ABOVE Resistance — broken out`
+        : `${fmtPrice(Math.abs(resDist))} pts below Resistance (headroom left)`}</span>
     </div>` : ""}
     ${c.rule ? `<div class="crule">${esc(c.rule)}</div>` : ""}
   </div>`;
