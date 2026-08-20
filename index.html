@@ -246,28 +246,35 @@
   }
   .crule { font-size: 10.5px; color: var(--faint); font-family: var(--mono); letter-spacing: .2px; }
 
-  .ladder-card { justify-content: flex-start; }
-  .ladder { display: flex; flex-direction: column; margin: 4px 0 2px; }
-  .ladder-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 0; border-top: 1px dashed var(--line);
+  .wide-ladder-card { margin-bottom: 16px; padding: 20px 26px 22px; }
+  .hladder { margin-top: 18px; }
+  .hladder-track {
+    position: relative; height: 6px; border-radius: 999px; margin: 0 8px;
+    background: linear-gradient(90deg, var(--up) 0%, var(--faint) 50%, var(--down) 100%);
+    opacity: .55;
   }
-  .ladder-row.res { border-top: none; }
-  .ladder-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-  .ladder-row.res .ladder-dot { background: var(--down); }
-  .ladder-row.cls .ladder-dot { background: var(--text); }
-  .ladder-row.sup .ladder-dot { background: var(--up); }
-  .ladder-label {
+  .hladder-marker {
+    position: absolute; top: 50%; transform: translate(-50%, -50%);
+  }
+  .hm-dot {
+    display: block; width: 14px; height: 14px; border-radius: 50%;
+    border: 3px solid var(--surface); box-shadow: 0 0 0 1px var(--line);
+  }
+  .hladder-marker.sup .hm-dot { background: var(--up); }
+  .hladder-marker.res .hm-dot { background: var(--down); }
+  .hladder-marker.cls .hm-dot { background: var(--text); width: 16px; height: 16px; }
+  .hladder-labels { display: flex; justify-content: space-between; margin-top: 22px; }
+  .hl-item { display: flex; flex-direction: column; gap: 3px; }
+  .hl-item.cls { align-items: center; text-align: center; }
+  .hl-item.res { align-items: flex-end; text-align: right; }
+  .hl-label {
     font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
-    color: var(--muted); font-weight: 600; flex: 1;
+    color: var(--muted); font-weight: 600;
   }
-  .ladder-val { font-size: 17px; font-weight: 700; font-family: var(--mono); color: var(--text); }
-  .ladder-row.res .ladder-val { color: var(--down); }
-  .ladder-row.sup .ladder-val { color: var(--up); }
-  .ladder-gap {
-    font-size: 10.5px; color: var(--faint); font-family: var(--mono);
-    padding-left: 19px;
-  }
+  .hl-val { font-size: 22px; font-weight: 700; font-family: var(--mono); color: var(--text); }
+  .hl-item.sup .hl-val { color: var(--up); }
+  .hl-item.res .hl-val { color: var(--down); }
+  .hl-sub { font-size: 10.5px; color: var(--faint); font-family: var(--mono); }
   .bias {
     border-radius: 14px; padding: 16px 18px; margin-bottom: 16px;
     border: 1px solid var(--line); background: var(--surface);
@@ -348,6 +355,7 @@
 
   <div id="panel-analysis">
     <div id="bias"></div>
+    <div id="niftyLevels"></div>
     <div class="summary" id="summary"></div>
     <div class="grid checks" id="checks"></div>
   </div>
@@ -472,20 +480,36 @@ function fmtPrice(n) {
 
 function niftyLadderHTML(c, title) {
   const o = c.extra.ohlc;
-  const resToClose = o.high - o.close;
-  const closeToSup = o.close - o.low;
+  const span = o.high - o.low;
+  const pct = span > 0 ? Math.min(100, Math.max(0, ((o.close - o.low) / span) * 100)) : 50;
+  const resGap = o.high - o.close, supGap = o.close - o.low;
   return `
-  <div class="card check ladder-card">
+  <div class="card wide-ladder-card">
     <div class="ctop">
       <span class="ctitle">${esc(title)}</span>
       <span class="csrc">${esc(c.source)}</span>
     </div>
-    <div class="ladder">
-      <div class="ladder-row res"><span class="ladder-dot"></span><span class="ladder-label">Resistance</span><span class="ladder-val">${fmtPrice(o.high)}</span></div>
-      <div class="ladder-gap">${resToClose >= 0 ? "▼" : "▲"} ${fmtPrice(Math.abs(resToClose))} pts</div>
-      <div class="ladder-row cls"><span class="ladder-dot"></span><span class="ladder-label">Close</span><span class="ladder-val">${fmtPrice(o.close)}</span></div>
-      <div class="ladder-gap">${closeToSup >= 0 ? "▼" : "▲"} ${fmtPrice(Math.abs(closeToSup))} pts</div>
-      <div class="ladder-row sup"><span class="ladder-dot"></span><span class="ladder-label">Support</span><span class="ladder-val">${fmtPrice(o.low)}</span></div>
+    <div class="hladder">
+      <div class="hladder-track">
+        <div class="hladder-marker sup" style="left:0%"><span class="hm-dot"></span></div>
+        <div class="hladder-marker cls" style="left:${pct}%"><span class="hm-dot"></span></div>
+        <div class="hladder-marker res" style="left:100%"><span class="hm-dot"></span></div>
+      </div>
+      <div class="hladder-labels">
+        <div class="hl-item sup">
+          <span class="hl-label">Support</span>
+          <span class="hl-val">${fmtPrice(o.low)}</span>
+        </div>
+        <div class="hl-item cls">
+          <span class="hl-label">Close · ${esc(o.date || "")}</span>
+          <span class="hl-val">${fmtPrice(o.close)}</span>
+          <span class="hl-sub">▲ ${fmtPrice(supGap)} · ▼ ${fmtPrice(resGap)} pts</span>
+        </div>
+        <div class="hl-item res">
+          <span class="hl-label">Resistance</span>
+          <span class="hl-val">${fmtPrice(o.high)}</span>
+        </div>
+      </div>
     </div>
     ${c.rule ? `<div class="crule">${esc(c.rule)}</div>` : ""}
   </div>`;
@@ -493,7 +517,6 @@ function niftyLadderHTML(c, title) {
 
 function checkCardHTML(c) {
   const title = c.title.replace(/^\d+\s*[·.]\s*/, "");
-  if (c.id === "chk_nifty" && c.extra && c.extra.ohlc) return niftyLadderHTML(c, title);
   return `
   <div class="card check">
     <div class="ctop">
@@ -588,7 +611,12 @@ async function load() {
     }
 
     const checks = d.checks || [];
-    document.getElementById("checks").innerHTML = checks.map(checkCardHTML).join("");
+    const niftyCheck = checks.find(c => c.id === "chk_nifty" && c.extra && c.extra.ohlc);
+    document.getElementById("niftyLevels").innerHTML = niftyCheck
+      ? niftyLadderHTML(niftyCheck, niftyCheck.title.replace(/^\d+\s*[·.]\s*/, ""))
+      : "";
+    const gridChecks = checks.filter(c => c.id !== "chk_nifty");
+    document.getElementById("checks").innerHTML = gridChecks.map(checkCardHTML).join("");
     document.getElementById("tabCountA").textContent = checks.length;
     renderSummary(checks);
 
