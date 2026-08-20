@@ -354,6 +354,8 @@ def angelone_live_and_prev(headers, exchange, symboltoken):
     in testing), so logging in once per instrument silently breaks the
     2nd+ one."""
     ltp = angelone_ltp(headers, exchange, symboltoken)
+    time.sleep(1)  # same ~1 req/sec ceiling applies within one instrument's
+                    # own two calls, not just between different instruments
     rows = angelone_candles(headers, exchange, symboltoken, days=10)
     rows.sort(key=lambda r: r["date"])
     today = ist_now().date().isoformat()
@@ -536,6 +538,8 @@ def build_market():
     angel_headers = None
     try:
         angel_headers = angelone_login()
+        time.sleep(1)  # give the login call its own gap before the first
+                        # instrument call — same rate ceiling applies here
     except Exception:
         pass
 
