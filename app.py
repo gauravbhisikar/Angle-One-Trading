@@ -278,6 +278,27 @@ def _env_any(*names):
     raise KeyError(names[0])
 
 
+_ANGEL_GATE_LOCK = threading.Lock()
+_ANGEL_LAST_CALL = [0.0]
+ANGEL_MIN_INTERVAL = 1.3  # seconds required between ANY two Angel One API
+                          # calls, enforced across every thread. The slow
+                          # loop (every REFRESH_SECONDS) and the fast tick
+                          # loop (every 2s) each used to space their OWN
+                          # calls with a local time.sleep(), but neither knew
+                          # about the other — their bursts could still
+                          # overlap and trip the ~1 req/sec ceiling. One
+                          # shared gate serializes every real HTTP call
+                          # regardless of which loop/thread makes it.
+
+
+def _angel_rate_gate():
+    with _ANGEL_GATE_LOCK:
+        wait = ANGEL_MIN_INTERVAL - (time.time() - _ANGEL_LAST_CALL[0])
+        if wait > 0:
+            time.sleep(wait)
+        _ANGEL_LAST_CALL[0] = time.time()
+
+
 ANGEL_SESSION = {"headers": None, "at": 0.0}
 ANGEL_SESSION_TTL = 300  # seconds — logging in fresh every fast-tick cycle
                           # would itself trip the rate limit; a session's
@@ -316,6 +337,7 @@ def angelone_login():
                     # client (connectors/angelone/client.go) never fakes a
                     # UA either; match its plain-script identity instead.
                     "User-Agent": "python-urllib/angelone-premarket-dashboard"}
+    _angel_rate_gate()
     login = http_post_json(
         "https://apiconnect.angelbroking.com/rest/auth/angelbroking/user/v1/loginByPassword",
         {"clientcode": client, "password": pin, "totp": get_totp(totp_secret)},
@@ -329,6 +351,7 @@ def angelone_login():
 def angelone_candles(headers, exchange, symboltoken, days=30):
     to = date.today()
     fr = to - timedelta(days=days)
+    _angel_rate_gate()
     hist = http_post_json(
         "https://apiconnect.angelbroking.com/rest/secure/angelbroking/historical/v1/getCandleData",
         {"exchange": exchange, "symboltoken": symboltoken, "interval": "ONE_DAY",
@@ -359,6 +382,7 @@ def angelone_ltp(headers, exchange, symboltoken):
     order/v1/getLtpData — that older endpoint gets rejected by Angel One's
     WAF (confirmed: same login/session, same server, getLtpData returns
     a WAF "Request Rejected" page while market/v1/quote succeeds)."""
+    _angel_rate_gate()
     q = http_post_json(
         "https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/quote",
         {"mode": "LTP", "exchangeTokens": {exchange: [symboltoken]}},
@@ -397,8 +421,6 @@ def angelone_live_and_prev(headers, exchange, symboltoken):
     in testing), so logging in once per instrument silently breaks the
     2nd+ one."""
     ltp = _angelone_rate_limited_retry(lambda: angelone_ltp(headers, exchange, symboltoken))
-    time.sleep(1)  # same ~1 req/sec ceiling applies within one instrument's
-                    # own two calls, not just between different instruments
     rows = _angelone_rate_limited_retry(lambda: angelone_candles(headers, exchange, symboltoken, days=10))
     rows.sort(key=lambda r: r["date"])
     today = ist_now().date().isoformat()
@@ -593,8 +615,6 @@ def build_market():
     angel_headers = None
     try:
         angel_headers = angelone_session()
-        time.sleep(1)  # give the login call its own gap before the first
-                        # instrument call — same rate ceiling applies here
     except Exception:
         pass
 
@@ -625,10 +645,6 @@ def build_market():
                      "change_text": "unavailable", "detail": "Angel One/NSE/Yahoo all failed", "source": "NSE",
                      "updated": ""})
                 warnings.append(f"India VIX unavailable — Angel One {e1!r}, NSE {e2!r}, Yahoo {e3!r}")
-
-    if angel_headers is not None:
-        time.sleep(1)  # Angel One rate-limits to ~1 req/sec; back-to-back
-                        # instrument fetches otherwise 403 the 2nd one.
 
     # --- Live NIFTY 50 (Angel One primary, NSE then Yahoo fallback) ---
     try:
@@ -959,7 +975,6 @@ def _angel_tick_loop():
                     chk["verdict"], chk["verdict_class"] = v, vc
                     chk["value"] = f"{fnum(ltp)} ({chg:+.2f}%)" if chg is not None else fnum(ltp)
                     chk["reason"] = f"Δ {chg:+.2f}%" if chg is not None else ""
-            time.sleep(1)  # keep the ~1/sec spacing between instruments
 
 
 # --------------------------------------------------------------------------
