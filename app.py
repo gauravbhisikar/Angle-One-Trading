@@ -36,7 +36,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-REFRESH_SECONDS = 60
+REFRESH_SECONDS = 10  # full rebuild (Finnhub/Twelve Data/Alpha
+                       # Vantage/NSE/Yahoo/GIFT) — bounded by Twelve Data's
+                       # free-tier 8 req/min ceiling (~7.5s floor), not by
+                       # Angel One (which the separate fast tick loop
+                       # handles on its own faster cadence, see
+                       # _angel_tick_loop / TICK_INTERVAL_SECONDS above).
 PORT = int(os.environ.get("DASHBOARD_PORT", "9080"))
 TZ_IST = timedelta(hours=5, minutes=30)
 
@@ -273,6 +278,25 @@ def _env_any(*names):
     raise KeyError(names[0])
 
 
+ANGEL_SESSION = {"headers": None, "at": 0.0}
+ANGEL_SESSION_TTL = 300  # seconds — logging in fresh every fast-tick cycle
+                          # would itself trip the rate limit; a session's
+                          # JWT stays valid far longer than this anyway.
+ANGEL_PREV_CLOSE = {}    # symboltoken -> previous close, refreshed once/day
+                          # by the slow loop; the fast tick loop only needs
+                          # the live LTP, not a fresh candle fetch every cycle.
+
+
+def angelone_session():
+    now = time.time()
+    if ANGEL_SESSION["headers"] and now - ANGEL_SESSION["at"] < ANGEL_SESSION_TTL:
+        return ANGEL_SESSION["headers"]
+    headers = angelone_login()
+    ANGEL_SESSION["headers"] = headers
+    ANGEL_SESSION["at"] = now
+    return headers
+
+
 def angelone_login():
     # ANGEL_* matches the Go engine's naming (the real server .env); the
     # ANGLE_ONE_* names are kept as a fallback for older local setups.
@@ -347,16 +371,21 @@ def angelone_ltp(headers, exchange, symboltoken):
 
 def _angelone_rate_limited_retry(fn):
     """Angel One's rate ceiling isn't a hard 1/sec — network jitter can still
-    land two calls in the same window even with a fixed sleep between them.
-    One retry with a longer backoff absorbs that jitter instead of falling
-    all the way back to NSE/Yahoo on an otherwise-transient 403."""
-    try:
-        return fn()
-    except urllib.error.HTTPError as e:
-        if e.code != 403:
-            raise
-        time.sleep(2)
-        return fn()
+    land two calls in the same window even with a fixed sleep between them,
+    and one retry sometimes still isn't enough. Backs off harder each
+    attempt (2s, 4s) before giving up and letting the caller fall back to
+    NSE/Yahoo."""
+    last = None
+    for backoff in (0, 2, 4):
+        if backoff:
+            time.sleep(backoff)
+        try:
+            return fn()
+        except urllib.error.HTTPError as e:
+            if e.code != 403:
+                raise
+            last = e
+    raise last
 
 
 def angelone_live_and_prev(headers, exchange, symboltoken):
@@ -375,7 +404,18 @@ def angelone_live_and_prev(headers, exchange, symboltoken):
     today = ist_now().date().isoformat()
     prev_rows = [r for r in rows if r["date"] < today]
     prev_close = (prev_rows[-1] if prev_rows else rows[-1])["close"]
+    ANGEL_PREV_CLOSE[symboltoken] = prev_close  # fast tick loop reuses this
     return float(ltp), prev_close
+
+
+def vix_verdict(vix_chg):
+    """Shared with the fast tick loop so a mid-cycle LTP-only refresh
+    produces the exact same verdict the slow full-rebuild would have."""
+    if vix_chg >= 5:
+        return "Volatility expected ↑", "down"
+    if vix_chg <= -5:
+        return "Calmer market", "up"
+    return "Normal", "flat"
 
 
 # --- Aggregations ----------------------------------------------------------
@@ -547,11 +587,12 @@ def build_market():
         quote_card(cid, title, src, cur, chg,
                    f"prev close {fnum(prev)}" if prev else "")
 
-    # Angel One: log in once, reuse for both VIX and NIFTY below — logging
-    # in separately per instrument gets the 2nd login rate-limited (403).
+    # Angel One: reuse the cached session (angelone_session()) across both
+    # this rebuild and the fast tick loop — logging in fresh every cycle
+    # gets rate-limited (403) same as any other rapid successive call.
     angel_headers = None
     try:
-        angel_headers = angelone_login()
+        angel_headers = angelone_session()
         time.sleep(1)  # give the login call its own gap before the first
                         # instrument call — same rate ceiling applies here
     except Exception:
@@ -762,12 +803,7 @@ def build_market():
     # 4. India VIX vs previous close
     vix_v = raw.get("vix", {}).get("chg")
     if vix_v is not None:
-        if vix_v >= 5:
-            v, vc = "Volatility expected ↑", "down"
-        elif vix_v <= -5:
-            v, vc = "Calmer market", "up"
-        else:
-            v, vc = "Normal", "flat"
+        v, vc = vix_verdict(vix_v)
         check("chk_vix", "4 · India VIX", v, vc,
               f"{fnum(raw['vix']['value'])} ({vix_v:+.2f}%)",
               "VIX tells how big the market may move, not which direction",
@@ -866,6 +902,66 @@ def _refresh_loop():
         time.sleep(REFRESH_SECONDS)
 
 
+# Angel One instruments the fast tick loop refreshes: (card id, exchange,
+# symboltoken, check id or None if this instrument has no "checks" entry).
+ANGEL_TICK_INSTRUMENTS = [
+    ("vix", "NSE", "99926017", "chk_vix"),
+    ("nifty_live", "NSE", "99926000", None),
+]
+TICK_INTERVAL_SECONDS = 2
+
+
+def _angel_tick_loop():
+    """Fast-cadence LTP-only refresh for whichever of VIX/NIFTY the slow
+    loop (_refresh_loop, every REFRESH_SECONDS) most recently established
+    Angel One as the live source for. Reuses one cached session
+    (angelone_session()) across every cycle — logging in fresh every 2s
+    would itself trip Angel One's rate limit — and only asks for the LTP,
+    never re-fetching candle history (that only changes once/day, and the
+    slow loop already keeps ANGEL_PREV_CLOSE current). Patches the cached
+    snapshot's cards + checks in place so Live-mode polling sees genuinely
+    fresh numbers between slow-loop rebuilds instead of a static value.
+    """
+    while True:
+        time.sleep(TICK_INTERVAL_SECONDS)
+        try:
+            headers = angelone_session()
+        except Exception:
+            continue
+
+        with CACHE_LOCK:
+            snap = CACHE.get("market")
+        if not snap:
+            continue
+        cards_by_id = {c["id"]: c for c in snap.get("cards", [])}
+        checks_by_id = {c["id"]: c for c in snap.get("checks", [])}
+
+        for cid, exch, token, check_id in ANGEL_TICK_INSTRUMENTS:
+            card = cards_by_id.get(cid)
+            prev_close = ANGEL_PREV_CLOSE.get(token)
+            if not card or card.get("source") != "Angel One" or prev_close is None:
+                continue  # slow loop isn't on Angel One for this one right
+                          # now (fallback active) — don't fight its output
+            try:
+                ltp = _angelone_rate_limited_retry(lambda: angelone_ltp(headers, exch, token))
+            except Exception:
+                continue
+            chg = pick_change(ltp, prev_close)
+            now_str = ist_now().strftime("%H:%M:%S")
+            with CACHE_LOCK:
+                card["value"] = fnum(ltp)
+                card["change"] = chg
+                card["change_text"] = f"{chg:+.2f}%" if chg is not None else "—"
+                card["updated"] = now_str
+                if check_id and check_id in checks_by_id:
+                    v, vc = vix_verdict(chg) if chg is not None else ("Normal", "flat")
+                    chk = checks_by_id[check_id]
+                    chk["verdict"], chk["verdict_class"] = v, vc
+                    chk["value"] = f"{fnum(ltp)} ({chg:+.2f}%)" if chg is not None else fnum(ltp)
+                    chk["reason"] = f"Δ {chg:+.2f}%" if chg is not None else ""
+            time.sleep(1)  # keep the ~1/sec spacing between instruments
+
+
 # --------------------------------------------------------------------------
 # HTTP server
 # --------------------------------------------------------------------------
@@ -940,6 +1036,7 @@ def main():
     global BUILD_STARTED
     BUILD_STARTED = ist_now().strftime("%Y-%m-%d %H:%M:%S")
     threading.Thread(target=_refresh_loop, daemon=True).start()
+    threading.Thread(target=_angel_tick_loop, daemon=True).start()
     threading.Thread(target=_autoreload_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"Pre-market dashboard on http://localhost:{PORT} (build {BUILD_COMMIT}, started {BUILD_STARTED} IST)")

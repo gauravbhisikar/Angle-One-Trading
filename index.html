@@ -394,7 +394,7 @@ function setLive(on) {
   clearInterval(_cd);
   const cd = document.getElementById("countdown");
   if (on) {
-    _auto = setInterval(load, 60000);
+    _auto = setInterval(load, 2000);
     cd.style.color = "";
   } else {
     cd.style.color = "";
@@ -494,10 +494,10 @@ function renderSummary(checks) {
   else if (good > bad && good >= 3) { label = "CONSTRUCTIVE / BULLISH"; cls = "up"; }
   else { label = "MIXED / NEUTRAL"; cls = "flat"; }
 
+const RANK = { down: 0, up: 1, flat: 2 };
   const reasons = signals
-    .filter(c => c.verdict_class !== "flat")
-    .sort((a, b) => (a.verdict_class === "down" ? -1 : 1) - (b.verdict_class === "down" ? -1 : 1))
-    .slice(0, 5)
+    .slice()
+    .sort((a, b) => RANK[a.verdict_class] - RANK[b.verdict_class])
     .map(c => `<div class="bias-reason ${c.verdict_class}"><span class="bdot"></span>
       ${esc(c.title.replace(/^\d+\s*·\s*/, ""))}: ${esc(c.verdict)}</div>`).join("");
 
@@ -551,7 +551,7 @@ async function load() {
       document.getElementById(g).innerHTML += cardHTML(c);
     }
 
-    tickCountdown(d.refresh_seconds || 60);
+    tickCountdown(live ? 2 : (d.refresh_seconds || 10));
   } catch (e) {
     const b = document.getElementById("errBanner");
     b.style.display = "block";
