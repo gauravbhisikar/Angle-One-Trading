@@ -245,6 +245,29 @@
     background: var(--surface2); border-radius: 8px; padding: 8px 12px; width: fit-content;
   }
   .crule { font-size: 10.5px; color: var(--faint); font-family: var(--mono); letter-spacing: .2px; }
+
+  .ladder-card { justify-content: flex-start; }
+  .ladder { display: flex; flex-direction: column; margin: 4px 0 2px; }
+  .ladder-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 0; border-top: 1px dashed var(--line);
+  }
+  .ladder-row.res { border-top: none; }
+  .ladder-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .ladder-row.res .ladder-dot { background: var(--down); }
+  .ladder-row.cls .ladder-dot { background: var(--text); }
+  .ladder-row.sup .ladder-dot { background: var(--up); }
+  .ladder-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); font-weight: 600; flex: 1;
+  }
+  .ladder-val { font-size: 17px; font-weight: 700; font-family: var(--mono); color: var(--text); }
+  .ladder-row.res .ladder-val { color: var(--down); }
+  .ladder-row.sup .ladder-val { color: var(--up); }
+  .ladder-gap {
+    font-size: 10.5px; color: var(--faint); font-family: var(--mono);
+    padding-left: 19px;
+  }
   .bias {
     border-radius: 14px; padding: 16px 18px; margin-bottom: 16px;
     border: 1px solid var(--line); background: var(--surface);
@@ -443,8 +466,34 @@ function cardHTML(c) {
   </div>`;
 }
 
+function fmtPrice(n) {
+  return Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 });
+}
+
+function niftyLadderHTML(c, title) {
+  const o = c.extra.ohlc;
+  const resToClose = o.high - o.close;
+  const closeToSup = o.close - o.low;
+  return `
+  <div class="card check ladder-card">
+    <div class="ctop">
+      <span class="ctitle">${esc(title)}</span>
+      <span class="csrc">${esc(c.source)}</span>
+    </div>
+    <div class="ladder">
+      <div class="ladder-row res"><span class="ladder-dot"></span><span class="ladder-label">Resistance</span><span class="ladder-val">${fmtPrice(o.high)}</span></div>
+      <div class="ladder-gap">${resToClose >= 0 ? "▼" : "▲"} ${fmtPrice(Math.abs(resToClose))} pts</div>
+      <div class="ladder-row cls"><span class="ladder-dot"></span><span class="ladder-label">Close</span><span class="ladder-val">${fmtPrice(o.close)}</span></div>
+      <div class="ladder-gap">${closeToSup >= 0 ? "▼" : "▲"} ${fmtPrice(Math.abs(closeToSup))} pts</div>
+      <div class="ladder-row sup"><span class="ladder-dot"></span><span class="ladder-label">Support</span><span class="ladder-val">${fmtPrice(o.low)}</span></div>
+    </div>
+    ${c.rule ? `<div class="crule">${esc(c.rule)}</div>` : ""}
+  </div>`;
+}
+
 function checkCardHTML(c) {
   const title = c.title.replace(/^\d+\s*[·.]\s*/, "");
+  if (c.id === "chk_nifty" && c.extra && c.extra.ohlc) return niftyLadderHTML(c, title);
   return `
   <div class="card check">
     <div class="ctop">
@@ -496,6 +545,7 @@ function renderSummary(checks) {
 
 const RANK = { down: 0, up: 1, flat: 2 };
   const reasons = signals
+    .filter(c => c.id !== "chk_nifty")  // support/resistance isn't a directional signal — shown as its own ladder card instead
     .slice()
     .sort((a, b) => RANK[a.verdict_class] - RANK[b.verdict_class])
     .map(c => `<div class="bias-reason ${c.verdict_class}"><span class="bdot"></span>
