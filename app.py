@@ -345,6 +345,20 @@ def angelone_ltp(headers, exchange, symboltoken):
     return float(fetched[0]["ltp"])
 
 
+def _angelone_rate_limited_retry(fn):
+    """Angel One's rate ceiling isn't a hard 1/sec — network jitter can still
+    land two calls in the same window even with a fixed sleep between them.
+    One retry with a longer backoff absorbs that jitter instead of falling
+    all the way back to NSE/Yahoo on an otherwise-transient 403."""
+    try:
+        return fn()
+    except urllib.error.HTTPError as e:
+        if e.code != 403:
+            raise
+        time.sleep(2)
+        return fn()
+
+
 def angelone_live_and_prev(headers, exchange, symboltoken):
     """Live LTP + prior trading day's close (for a %-change figure), given
     an already-logged-in session. Caller must share one login (via
@@ -353,10 +367,10 @@ def angelone_live_and_prev(headers, exchange, symboltoken):
     logins seconds apart from the same client got the second one 403'd
     in testing), so logging in once per instrument silently breaks the
     2nd+ one."""
-    ltp = angelone_ltp(headers, exchange, symboltoken)
+    ltp = _angelone_rate_limited_retry(lambda: angelone_ltp(headers, exchange, symboltoken))
     time.sleep(1)  # same ~1 req/sec ceiling applies within one instrument's
                     # own two calls, not just between different instruments
-    rows = angelone_candles(headers, exchange, symboltoken, days=10)
+    rows = _angelone_rate_limited_retry(lambda: angelone_candles(headers, exchange, symboltoken, days=10))
     rows.sort(key=lambda r: r["date"])
     today = ist_now().date().isoformat()
     prev_rows = [r for r in rows if r["date"] < today]
