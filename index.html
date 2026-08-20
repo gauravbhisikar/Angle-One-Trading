@@ -275,6 +275,20 @@
   .hl-item.sup .hl-val { color: var(--up); }
   .hl-item.res .hl-val { color: var(--down); }
   .hl-sub { font-size: 10.5px; color: var(--faint); font-family: var(--mono); }
+  .hladder-track { overflow: visible; }
+  .hladder-marker.cur .hm-dot {
+    background: var(--accent); width: 12px; height: 12px;
+    box-shadow: 0 0 0 1px var(--line), 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+  .hladder-current {
+    display: flex; align-items: baseline; gap: 14px; margin-top: 16px;
+    padding-top: 14px; border-top: 1px solid var(--line); flex-wrap: wrap;
+  }
+  .hc-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); font-weight: 600; }
+  .hc-val { font-size: 18px; font-weight: 700; font-family: var(--mono); color: var(--accent); }
+  .hc-dist { font-size: 11.5px; font-family: var(--mono); }
+  .hc-dist.up { color: var(--up); }
+  .hc-dist.down { color: var(--down); }
   .bias {
     border-radius: 14px; padding: 16px 18px; margin-bottom: 16px;
     border: 1px solid var(--line); background: var(--surface);
@@ -480,9 +494,14 @@ function fmtPrice(n) {
 
 function niftyLadderHTML(c, title) {
   const o = c.extra.ohlc;
+  const current = c.extra.current;
   const span = o.high - o.low;
   const pct = span > 0 ? Math.min(100, Math.max(0, ((o.close - o.low) / span) * 100)) : 50;
   const resGap = o.high - o.close, supGap = o.close - o.low;
+  const curPct = (current != null && span > 0)
+    ? Math.min(106, Math.max(-6, ((current - o.low) / span) * 100)) : null;
+  const supDist = current != null ? current - o.low : null;
+  const resDist = current != null ? current - o.high : null;
   return `
   <div class="card wide-ladder-card">
     <div class="ctop">
@@ -494,6 +513,7 @@ function niftyLadderHTML(c, title) {
         <div class="hladder-marker sup" style="left:0%"><span class="hm-dot"></span></div>
         <div class="hladder-marker cls" style="left:${pct}%"><span class="hm-dot"></span></div>
         <div class="hladder-marker res" style="left:100%"><span class="hm-dot"></span></div>
+        ${curPct != null ? `<div class="hladder-marker cur" style="left:${curPct}%"><span class="hm-dot"></span></div>` : ""}
       </div>
       <div class="hladder-labels">
         <div class="hl-item sup">
@@ -501,7 +521,7 @@ function niftyLadderHTML(c, title) {
           <span class="hl-val">${fmtPrice(o.low)}</span>
         </div>
         <div class="hl-item cls">
-          <span class="hl-label">Close · ${esc(o.date || "")}</span>
+          <span class="hl-label">Prev Close · ${esc(o.date || "")}</span>
           <span class="hl-val">${fmtPrice(o.close)}</span>
           <span class="hl-sub">▲ ${fmtPrice(supGap)} · ▼ ${fmtPrice(resGap)} pts</span>
         </div>
@@ -511,6 +531,13 @@ function niftyLadderHTML(c, title) {
         </div>
       </div>
     </div>
+    ${current != null ? `
+    <div class="hladder-current">
+      <span class="hc-label">Current (GIFT)</span>
+      <span class="hc-val">${fmtPrice(current)}</span>
+      <span class="hc-dist ${supDist >= 0 ? "up" : "down"}">${supDist >= 0 ? "▲" : "▼"} ${fmtPrice(Math.abs(supDist))} vs Support</span>
+      <span class="hc-dist ${resDist >= 0 ? "up" : "down"}">${resDist >= 0 ? "▲" : "▼"} ${fmtPrice(Math.abs(resDist))} vs Resistance</span>
+    </div>` : ""}
     ${c.rule ? `<div class="crule">${esc(c.rule)}</div>` : ""}
   </div>`;
 }

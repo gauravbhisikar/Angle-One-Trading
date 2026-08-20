@@ -873,13 +873,17 @@ def build_market():
         y = nifty["yesterday"]
         sup = y["low"]
         res = y["high"]
+        current = raw.get("gift", {}).get("value")  # GIFT NIFTY — best live
+                                                       # proxy for "where is
+                                                       # NIFTY right now" pre-market
         check("chk_nifty", "7 · NIFTY Yesterday Levels",
               f"Support {fnum(sup)} / Resistance {fnum(res)}", "flat",
               f"Close {fnum(y['close'])}",
               "today's key price levels",
               nifty["source"],
               f"Low {fnum(sup)} · High {fnum(res)}",
-              {"ohlc": {"high": y["high"], "low": y["low"], "close": y["close"], "date": y["date"]}},
+              {"ohlc": {"high": y["high"], "low": y["low"], "close": y["close"], "date": y["date"]},
+               "current": current},
               rule="Support = yesterday low · Resistance = yesterday high")
     else:
         check("chk_nifty", "7 · NIFTY Yesterday Levels", "Unavailable", "flat", "—", "", "Yahoo")
