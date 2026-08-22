@@ -327,6 +327,26 @@
   .bias-note { font-size: 11px; color: var(--muted); margin-top: 10px; font-style: italic; }
   .ai-trend { border-left: 3px solid var(--accent); }
   .ai-trend .ai-summary { font-size: 12.5px; color: var(--text); font-style: normal; line-height: 1.5; }
+  .ai-block { margin-top: 14px; }
+  .ai-block-label {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px;
+    color: var(--faint); font-weight: 700;
+  }
+  .ai-block-body { font-size: 12.5px; color: var(--text); line-height: 1.5; margin-top: 5px; }
+  .ai-scenarios {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px;
+    margin-top: 16px;
+  }
+  .ai-scenario {
+    border-radius: 10px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface2);
+  }
+  .ai-scenario.up   { border-color: color-mix(in srgb, var(--up) 25%, var(--line)); }
+  .ai-scenario.down { border-color: color-mix(in srgb, var(--down) 25%, var(--line)); }
+  .ai-scenario-label { font-size: 10.5px; font-weight: 700; }
+  .ai-scenario.up .ai-scenario-label   { color: var(--up); }
+  .ai-scenario.down .ai-scenario-label { color: var(--down); }
+  .ai-scenario.flat .ai-scenario-label { color: var(--amber); }
+  .ai-watchlist { margin: 6px 0 0 18px; padding: 0; font-size: 12.5px; color: var(--text); line-height: 1.6; }
 
   .card.list { grid-column: span 2; min-height: 200px; }
   .listitems { overflow-y: auto; max-height: 260px; display: flex; flex-direction: column; gap: 10px; }
@@ -747,15 +767,34 @@ function aiTrendHTML(trend) {
   if (!trend) return "";
   const cls = trend.expected_trend === "bullish" ? "up"
     : trend.expected_trend === "bearish" ? "down" : "flat";
+  const why = (trend.why || []).map(w => `<div class="bias-reason ${cls}"><span class="bdot"></span>${esc(w)}</div>`).join("");
+  const watch = (trend.watch_after_open || []).map((w, i) => `<li>${esc(w)}</li>`).join("");
   return `
   <div class="bias ai-trend ${cls}">
     <div class="bias-head">
-      <span class="bias-verdict">🤖 AI READ: ${esc((trend.expected_trend || "").toUpperCase())}</span>
+      <span class="bias-verdict">🤖 AI HYPOTHESIS: ${esc((trend.expected_trend || "").toUpperCase())}</span>
       <span class="bias-counts">confidence: ${esc(trend.confidence || "—")}</span>
     </div>
-    <div class="bias-note ai-summary">${esc(trend.summary || "")}</div>
-    <div class="bias-note">AI hypothesis synthesized from the checks above — not a prediction. The rule-based
-      PRE-MARKET BIAS above remains the primary, auditable verdict.</div>
+
+    ${why ? `<div class="bias-why">Why</div><div class="bias-reasons">${why}</div>` : ""}
+
+    ${trend.expected_opening ? `<div class="ai-block"><span class="ai-block-label">Expected opening</span>
+      <div class="ai-block-body">${esc(trend.expected_opening)}</div></div>` : ""}
+
+    <div class="ai-scenarios">
+      <div class="ai-scenario up"><span class="ai-scenario-label">▲ Bullish scenario</span>
+        <div class="ai-block-body">${esc(trend.bullish_scenario || "")}</div></div>
+      <div class="ai-scenario flat"><span class="ai-scenario-label">◆ Neutral scenario</span>
+        <div class="ai-block-body">${esc(trend.neutral_scenario || "")}</div></div>
+      <div class="ai-scenario down"><span class="ai-scenario-label">▼ Bearish scenario</span>
+        <div class="ai-block-body">${esc(trend.bearish_scenario || "")}</div></div>
+    </div>
+
+    ${watch ? `<div class="ai-block"><span class="ai-block-label">What to watch after 9:15</span>
+      <ol class="ai-watchlist">${watch}</ol></div>` : ""}
+
+    <div class="bias-note">${esc(trend.conclusion || "This is only a starting hypothesis — confirmation required from actual price action, do not trade purely from pre-market bias.")}
+      The rule-based PRE-MARKET BIAS above remains the primary, auditable verdict.</div>
   </div>`;
 }
 

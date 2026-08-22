@@ -324,16 +324,24 @@ def build_news():
 
 
 def openrouter_expected_trend(checks, news_sentiment):
-    """One extra LLM call synthesizing a short pre-market hypothesis across
-    every rule-based check plus news sentiment. Explicitly separate from
-    those checks — this is the AI's read on top of them, not a replacement;
+    """One extra LLM call synthesizing a testable pre-market hypothesis
+    across every rule-based check + news sentiment + today's key levels —
+    not a day-direction prediction. Explicitly separate from those checks;
     the rule-based PRE-MARKET BIAS stays the source of truth. Raises on any
     failure/no key; caller simply omits the AI card rather than faking one
     with keyword rules (unlike score_news, there's no honest deterministic
-    substitute for "synthesize all of this into one narrative")."""
+    substitute for "synthesize all of this into one hypothesis")."""
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
         raise RuntimeError("no OPENROUTER_API_KEY configured")
+    nifty_check = next((c for c in checks if c.get("id") == "chk_nifty"), None)
+    ohlc = ((nifty_check or {}).get("extra") or {}).get("ohlc")
+    current = ((nifty_check or {}).get("extra") or {}).get("current")
+    levels_line = (
+        f"- Key levels: Support {fnum(ohlc['low'])} · Prev Close {fnum(ohlc['close'])} · "
+        f"Resistance {fnum(ohlc['high'])}"
+        + (f" · Current/GIFT {fnum(current)}" if current is not None else "")
+    ) if ohlc else "- Key levels: unavailable"
     lines = [f"- {c['title'].split('· ', 1)[-1]}: {c['verdict']} ({c.get('value', '')})"
              for c in checks if c.get("id") != "chk_nifty"]
     lines.append(
@@ -341,16 +349,27 @@ def openrouter_expected_trend(checks, news_sentiment):
         f"({news_sentiment.get('positive', 0)} positive / {news_sentiment.get('negative', 0)} negative "
         f"/ {news_sentiment.get('high_impact_count', 0)} high-impact, out of "
         f"{news_sentiment.get('relevant_count', 0)} relevant stories)")
+    lines.append(levels_line)
     prompt = (
         "You are a pre-market analyst for India's NIFTY 50 index. Based ONLY "
-        "on the rule-based checks below — not your own outside market "
-        "knowledge — write a short pre-market hypothesis for today.\n\n"
+        "on the rule-based checks and levels below — not your own outside "
+        "market knowledge — build a testable pre-market HYPOTHESIS, not a "
+        "prediction of the whole day's direction.\n\n"
         + "\n".join(lines) + "\n\n"
-        "Respond with ONLY JSON, no prose outside it:\n"
-        '{"expected_trend":"bullish|bearish|mixed|cautious","confidence":"low|medium|high",'
-        '"summary":"<2-3 plain sentences. Must explicitly note this is a '
-        'pre-market hypothesis that price action after 9:15 can confirm or '
-        'reject, not a prediction of the whole day.>"}'
+        "Respond with ONLY JSON, no prose outside it, no markdown fences:\n"
+        "{\n"
+        '  "expected_trend": "bullish|bearish|neutral",\n'
+        '  "confidence": "low|medium|high",\n'
+        '  "why": ["<short bullet, e.g. \'Asia: Negative\'>", "..."],\n'
+        '  "expected_opening": "<1 sentence on where NIFTY likely opens vs prev close, from GIFT>",\n'
+        '  "bullish_scenario": "<1-2 sentences: IF price does X relative to the key levels above, '
+        'THEN bullish hypothesis confirmed>",\n'
+        '  "bearish_scenario": "<same shape, bearish case tied to the key levels>",\n'
+        '  "neutral_scenario": "<same shape, range-bound/no-clear-trend case>",\n'
+        '  "watch_after_open": ["<short checklist item tied to price action after 9:15>", "..."],\n'
+        '  "conclusion": "<1 sentence: this is only a starting hypothesis, confirmation required from '
+        'actual price action, do not trade purely from pre-market bias>"\n'
+        "}"
     )
     resp = http_post_json(
         "https://openrouter.ai/api/v1/chat/completions",
