@@ -217,7 +217,17 @@ def openrouter_classify_news(items):
     numbered = "\n".join(f"{i + 1}. {it['headline']}" for i, it in enumerate(items))
     prompt = (
         "You are a financial news classifier for India's NIFTY 50 index. "
-        "For each numbered headline below, judge whether it's likely to "
+        "The headlines below come from a general US/global business feed — "
+        "most of them have nothing to do with India or NIFTY 50. Be strict: "
+        "impact must reflect relevance and magnitude specifically for "
+        "NIFTY 50/Indian equities, not just 'is this market-related news in "
+        "general'. Lifestyle pieces, US-only politics/culture, and company "
+        "profiles with no India angle are impact:low regardless of tone. "
+        "Only global macro (Fed, oil/Hormuz, major geopolitical/war "
+        "escalation, US market moves with global risk-off potential) or "
+        "anything India-specific (RBI, Indian companies, India-US trade) "
+        "can be impact:medium or impact:high.\n\n"
+        "For each numbered headline, judge whether it's likely to "
         "materially affect NIFTY 50 today.\n\n"
         "Respond with ONLY a JSON array (no prose, no markdown fences), "
         "one object per headline, in the same order:\n"
@@ -263,9 +273,18 @@ def score_news(items):
 
 
 def aggregate_news_sentiment(items):
-    pos = sum(1 for i in items if i["sentiment"] == "positive")
-    neg = sum(1 for i in items if i["sentiment"] == "negative")
-    high_impact = [i for i in items if i["impact"] == "high"]
+    """Only counts medium/high-impact items — a "low impact / unrelated to
+    NIFTY" headline (most of Finnhub's general feed, in practice) shouldn't
+    move the overall verdict just because it happened to read negative in
+    tone. Trusts the classifier's own impact rating to filter noise."""
+    relevant = [i for i in items if i["impact"] != "low"]
+    pos = sum(1 for i in relevant if i["sentiment"] == "positive")
+    neg = sum(1 for i in relevant if i["sentiment"] == "negative")
+    high_impact = [i for i in relevant if i["impact"] == "high"]
+    if not relevant:
+        return {"overall": "No relevant news", "class": "flat", "positive": 0,
+                "negative": 0, "neutral": 0, "high_impact_count": 0,
+                "relevant_count": 0, "total_count": len(items)}
     if neg > pos and high_impact:
         overall, cls = "Negative", "down"
     elif pos > neg and high_impact:
@@ -277,19 +296,89 @@ def aggregate_news_sentiment(items):
     else:
         overall, cls = "Mixed / neutral", "flat"
     return {"overall": overall, "class": cls, "positive": pos, "negative": neg,
-            "neutral": len(items) - pos - neg, "high_impact_count": len(high_impact)}
+            "neutral": len(relevant) - pos - neg, "high_impact_count": len(high_impact),
+            "relevant_count": len(relevant), "total_count": len(items)}
+
+
+NEWS_IMPACT_RANK = {"high": 0, "medium": 1, "low": 2}
+NEWS_SHOWN_CAP = 20
 
 
 def build_news():
-    items = fetch_market_news()
+    # Fetch a bigger pool than we'll show — Finnhub's general feed is
+    # mostly US lifestyle/business noise with no India angle, so most of
+    # it gets classified impact:low and dropped below.
+    items = fetch_market_news(limit=40)
     score_news(items)
+    relevant = sorted((it for it in items if it["impact"] != "low"),
+                       key=lambda it: NEWS_IMPACT_RANK.get(it["impact"], 2))
+    shown = relevant[:NEWS_SHOWN_CAP]
     method = items[0]["method"] if items else "rules"
     return {
         "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
-        "items": items,
-        "sentiment": aggregate_news_sentiment(items),
+        "items": shown,
+        "sentiment": aggregate_news_sentiment(shown),
         "method": method,
+        "total_fetched": len(items),
     }
+
+
+def openrouter_expected_trend(checks, news_sentiment):
+    """One extra LLM call synthesizing a short pre-market hypothesis across
+    every rule-based check plus news sentiment. Explicitly separate from
+    those checks — this is the AI's read on top of them, not a replacement;
+    the rule-based PRE-MARKET BIAS stays the source of truth. Raises on any
+    failure/no key; caller simply omits the AI card rather than faking one
+    with keyword rules (unlike score_news, there's no honest deterministic
+    substitute for "synthesize all of this into one narrative")."""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("no OPENROUTER_API_KEY configured")
+    lines = [f"- {c['title'].split('· ', 1)[-1]}: {c['verdict']} ({c.get('value', '')})"
+             for c in checks if c.get("id") != "chk_nifty"]
+    lines.append(
+        f"- News Sentiment: {news_sentiment.get('overall')} "
+        f"({news_sentiment.get('positive', 0)} positive / {news_sentiment.get('negative', 0)} negative "
+        f"/ {news_sentiment.get('high_impact_count', 0)} high-impact, out of "
+        f"{news_sentiment.get('relevant_count', 0)} relevant stories)")
+    prompt = (
+        "You are a pre-market analyst for India's NIFTY 50 index. Based ONLY "
+        "on the rule-based checks below — not your own outside market "
+        "knowledge — write a short pre-market hypothesis for today.\n\n"
+        + "\n".join(lines) + "\n\n"
+        "Respond with ONLY JSON, no prose outside it:\n"
+        '{"expected_trend":"bullish|bearish|mixed|cautious","confidence":"low|medium|high",'
+        '"summary":"<2-3 plain sentences. Must explicitly note this is a '
+        'pre-market hypothesis that price action after 9:15 can confirm or '
+        'reject, not a prediction of the whole day.>"}'
+    )
+    resp = http_post_json(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {"model": NEWS_LLM_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2},
+        headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
+    content = resp["choices"][0]["message"]["content"].strip()
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+    trend = json.loads(content)
+    trend["method"] = "AI"
+    return trend
+
+
+def build_news_with_trend():
+    """build_news() plus the AI trend synthesis, which needs the latest
+    market checks alongside the news sentiment it just computed — kept as
+    a separate wrapper so build_news() itself stays usable standalone
+    (e.g. for local testing) without requiring CACHE to be populated."""
+    snap = build_news()
+    with CACHE_LOCK:
+        market_checks = (CACHE.get("market") or {}).get("checks", [])
+    try:
+        snap["trend"] = openrouter_expected_trend(market_checks, snap["sentiment"])
+    except Exception:
+        snap["trend"] = None
+    return snap
 
 
 def twelvedata(symbol):
@@ -1075,7 +1164,7 @@ NEWS_REFRESH_SECONDS = 300  # news doesn't need per-2s freshness, and this
 def _news_loop():
     while True:
         try:
-            snap = build_news()
+            snap = build_news_with_trend()
             with CACHE_LOCK:
                 CACHE["news"] = snap
         except Exception as exc:
@@ -1212,11 +1301,11 @@ class Handler(BaseHTTPRequestHandler):
                 snap = dict(CACHE.get("news") or {})
             if not snap:
                 try:
-                    snap = build_news()
+                    snap = build_news_with_trend()
                     with CACHE_LOCK:
                         CACHE["news"] = snap
                 except Exception as exc:
-                    snap = {"error": str(exc), "items": [],
+                    snap = {"error": str(exc), "items": [], "trend": None,
                             "sentiment": {"overall": "Unavailable", "class": "flat",
                                           "positive": 0, "negative": 0, "neutral": 0,
                                           "high_impact_count": 0},

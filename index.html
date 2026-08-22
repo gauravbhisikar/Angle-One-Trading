@@ -325,6 +325,8 @@
   .bias-reason.down .bdot { background: var(--down); }
   .bias-reason.flat .bdot { background: var(--amber); }
   .bias-note { font-size: 11px; color: var(--muted); margin-top: 10px; font-style: italic; }
+  .ai-trend { border-left: 3px solid var(--accent); }
+  .ai-trend .ai-summary { font-size: 12.5px; color: var(--text); font-style: normal; line-height: 1.5; }
 
   .card.list { grid-column: span 2; min-height: 200px; }
   .listitems { overflow-y: auto; max-height: 260px; display: flex; flex-direction: column; gap: 10px; }
@@ -385,6 +387,7 @@
 
   <div id="panel-analysis">
     <div id="bias"></div>
+    <div id="aiTrend"></div>
     <div id="niftyLevels"></div>
     <div class="summary" id="summary"></div>
     <div class="grid checks" id="checks"></div>
@@ -638,12 +641,28 @@ const RANK = { down: 0, up: 1, flat: 2 };
     </div>`;
 }
 
+function newsAsCheck(newsData) {
+  const s = (newsData && newsData.sentiment) || null;
+  if (!s || !s.relevant_count) return null;
+  return {
+    id: "chk_news", title: "8 · News Sentiment", source: newsData.method === "AI" ? "AI (DeepSeek Flash)" : "Keyword rules",
+    verdict: s.overall, verdict_class: s.class,
+    value: `${s.positive}▲ ${s.neutral}◆ ${s.negative}▼ of ${s.relevant_count} relevant`,
+    reason: `${s.high_impact_count} high-impact of ${s.relevant_count} relevant (${s.total_count} scanned)`,
+    rule: "Only medium/high-impact headlines count · net negative+high-impact → Negative · net positive+high-impact → Positive · else Slightly ±/Mixed",
+  };
+}
+
 async function load() {
   const btn = document.getElementById("refreshBtn");
   btn.disabled = true;
   try {
-    const res = await fetch("/api/market", { cache: "no-store" });
+    const [res, newsRes] = await Promise.all([
+      fetch("/api/market", { cache: "no-store" }),
+      fetch("/api/news", { cache: "no-store" }).catch(() => null),
+    ]);
     const d = await res.json();
+    const newsData = newsRes ? await newsRes.json().catch(() => null) : null;
     document.getElementById("errBanner").style.display = "none";
     const pill = document.getElementById("marketPill");
     pill.textContent = d.market.open ? "NSE OPEN" : "NSE " + (d.market.state || "").toUpperCase();
@@ -662,7 +681,8 @@ async function load() {
       warnBanner.style.display = "none";
     }
 
-    const checks = d.checks || [];
+    const newsCheck = newsAsCheck(newsData);
+    const checks = (d.checks || []).concat(newsCheck ? [newsCheck] : []);
     const niftyCheck = checks.find(c => c.id === "chk_nifty" && c.extra && c.extra.ohlc);
     document.getElementById("niftyLevels").innerHTML = niftyCheck
       ? niftyLadderHTML(niftyCheck, niftyCheck.title.replace(/^\d+\s*[·.]\s*/, ""))
@@ -671,6 +691,19 @@ async function load() {
     document.getElementById("checks").innerHTML = gridChecks.map(checkCardHTML).join("");
     document.getElementById("tabCountA").textContent = checks.length;
     renderSummary(checks);
+
+    document.getElementById("aiTrend").innerHTML = newsData ? aiTrendHTML(newsData.trend) : "";
+
+    if (newsData) {
+      newsLoaded = true;
+      document.getElementById("tabCountN").textContent = (newsData.items || []).length;
+      document.getElementById("newsSentiment").innerHTML =
+        newsSentimentHTML(newsData.sentiment || {}, newsData.method, newsData.generated_at, newsData.total_fetched);
+      const items = newsData.items || [];
+      document.getElementById("newsList").innerHTML = items.length
+        ? `<div class="grid news-grid">${items.map(newsItemHTML).join("")}</div>`
+        : `<div class="errbanner" style="background:var(--surface);color:var(--muted)">No headlines available right now.</div>`;
+    }
 
     const cards = d.cards || [];
     document.getElementById("tabCountR").textContent = cards.length;
@@ -693,8 +726,10 @@ async function load() {
 
 let newsLoaded = false;
 
-function newsSentimentHTML(s, method, generatedAt) {
+function newsSentimentHTML(s, method, generatedAt, totalFetched) {
   const cls = s.class || "flat";
+  const relevant = s.relevant_count != null ? s.relevant_count : (s.positive + s.neutral + s.negative);
+  const total = s.total_count != null ? s.total_count : totalFetched;
   return `
   <div class="bias ${cls}">
     <div class="bias-head">
@@ -702,8 +737,25 @@ function newsSentimentHTML(s, method, generatedAt) {
       <span class="bias-counts">${s.positive} positive · ${s.neutral} neutral · ${s.negative} negative
         · ${s.high_impact_count} high-impact</span>
     </div>
-    <div class="bias-note">${method === "AI" ? "Classified by a cheap LLM pass" : "Classified by keyword rules"}
+    <div class="bias-note">${relevant} of ${total} headlines were relevant to NIFTY — the rest filtered out as noise ·
+      ${method === "AI" ? "classified by a cheap LLM pass" : "classified by keyword rules"}
       · updated ${esc(generatedAt || "")} IST · headlines link to the original source</div>
+  </div>`;
+}
+
+function aiTrendHTML(trend) {
+  if (!trend) return "";
+  const cls = trend.expected_trend === "bullish" ? "up"
+    : trend.expected_trend === "bearish" ? "down" : "flat";
+  return `
+  <div class="bias ai-trend ${cls}">
+    <div class="bias-head">
+      <span class="bias-verdict">🤖 AI READ: ${esc((trend.expected_trend || "").toUpperCase())}</span>
+      <span class="bias-counts">confidence: ${esc(trend.confidence || "—")}</span>
+    </div>
+    <div class="bias-note ai-summary">${esc(trend.summary || "")}</div>
+    <div class="bias-note">AI hypothesis synthesized from the checks above — not a prediction. The rule-based
+      PRE-MARKET BIAS above remains the primary, auditable verdict.</div>
   </div>`;
 }
 
