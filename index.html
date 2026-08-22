@@ -291,6 +291,19 @@
   .hc-dist.down { color: var(--down); font-weight: 600; }
   .hc-dist.breakout { color: var(--accent); font-weight: 600; }
   .hc-dist.muted { color: var(--muted); }
+
+  .news-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; margin-top: 16px; }
+  .news-card { gap: 8px; }
+  .news-impact {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .6px; font-weight: 700;
+    padding: 3px 9px; border-radius: 999px; border: 1px solid transparent;
+  }
+  .news-impact.up   { color: var(--muted); background: var(--surface2); }
+  .news-impact.flat { color: var(--amber); background: var(--amber-bg); border-color: color-mix(in srgb, var(--amber) 25%, transparent); }
+  .news-impact.down { color: var(--down);  background: var(--down-bg);  border-color: color-mix(in srgb, var(--down) 25%, transparent); }
+  .news-headline { font-size: 13.5px; line-height: 1.45; color: var(--text); font-weight: 500; text-decoration: none; }
+  .news-headline:hover { text-decoration: underline; }
+  .news-foot { margin-top: auto; padding-top: 6px; }
   .bias {
     border-radius: 14px; padding: 16px 18px; margin-bottom: 16px;
     border: 1px solid var(--line); background: var(--surface);
@@ -362,6 +375,7 @@
 <div class="tabs">
   <div class="tab active" data-panel="analysis">Analysis <span class="tcount" id="tabCountA">9</span></div>
   <div class="tab" data-panel="raw">Raw Data <span class="tcount" id="tabCountR">12</span></div>
+  <div class="tab" data-panel="news">News <span class="tcount" id="tabCountN">0</span></div>
 </div>
 
 <main>
@@ -380,6 +394,11 @@
     <div class="section"><h2>India</h2><div class="grid raw" id="india"></div></div>
     <div class="section"><h2>Global Indices</h2><div class="grid raw" id="global"></div></div>
     <div class="section"><h2>Commodities &amp; FX</h2><div class="grid raw" id="fx"></div></div>
+  </div>
+
+  <div id="panel-news" class="hidden">
+    <div id="newsSentiment"></div>
+    <div id="newsList"></div>
   </div>
 </main>
 <footer>Free data sources: Finnhub · Twelve Data · Alpha Vantage · NSE · Yahoo Finance · TradingView · Angel One. For reference only — not investment advice.</footer>
@@ -672,13 +691,67 @@ async function load() {
   }
 }
 
+let newsLoaded = false;
+
+function newsSentimentHTML(s, method, generatedAt) {
+  const cls = s.class || "flat";
+  return `
+  <div class="bias ${cls}">
+    <div class="bias-head">
+      <span class="bias-verdict">NEWS SENTIMENT: ${esc((s.overall || "Unavailable").toUpperCase())}</span>
+      <span class="bias-counts">${s.positive} positive · ${s.neutral} neutral · ${s.negative} negative
+        · ${s.high_impact_count} high-impact</span>
+    </div>
+    <div class="bias-note">${method === "AI" ? "Classified by a cheap LLM pass" : "Classified by keyword rules"}
+      · updated ${esc(generatedAt || "")} IST · headlines link to the original source</div>
+  </div>`;
+}
+
+function newsItemHTML(it) {
+  const impactCls = it.impact === "high" ? "down" : (it.impact === "medium" ? "flat" : "up");
+  return `
+  <div class="card news-card">
+    <div class="ctop">
+      <span class="cverdict ${it.sentiment === "positive" ? "up" : (it.sentiment === "negative" ? "down" : "flat")}">
+        <span class="vdot"></span>${esc(it.sentiment)}</span>
+      <span class="news-impact ${impactCls}">${esc(it.impact)} impact</span>
+    </div>
+    <a class="news-headline" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${esc(it.headline)}</a>
+    ${it.reason ? `<div class="creason">${esc(it.reason)}</div>` : ""}
+    <div class="ctop news-foot">
+      <span class="csrc">${esc(it.source)}</span>
+      <span class="cupdated">${it.ts ? new Date(it.ts * 1000).toLocaleString("en-IN") : ""}</span>
+    </div>
+  </div>`;
+}
+
+async function loadNews() {
+  try {
+    const res = await fetch("/api/news", { cache: "no-store" });
+    const d = await res.json();
+    newsLoaded = true;
+    document.getElementById("tabCountN").textContent = (d.items || []).length;
+    document.getElementById("newsSentiment").innerHTML =
+      newsSentimentHTML(d.sentiment || {}, d.method, d.generated_at);
+    const items = d.items || [];
+    document.getElementById("newsList").innerHTML = items.length
+      ? `<div class="grid news-grid">${items.map(newsItemHTML).join("")}</div>`
+      : `<div class="errbanner" style="background:var(--surface);color:var(--muted)">No headlines available right now.</div>`;
+  } catch (e) {
+    document.getElementById("newsSentiment").innerHTML =
+      `<div class="errbanner">Could not load news — ${esc(e.message)}</div>`;
+  }
+}
+
 document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
     t.classList.add("active");
-    const analysis = t.dataset.panel === "analysis";
-    document.getElementById("panel-analysis").classList.toggle("hidden", !analysis);
-    document.getElementById("panel-raw").classList.toggle("hidden", analysis);
+    const panel = t.dataset.panel;
+    document.getElementById("panel-analysis").classList.toggle("hidden", panel !== "analysis");
+    document.getElementById("panel-raw").classList.toggle("hidden", panel !== "raw");
+    document.getElementById("panel-news").classList.toggle("hidden", panel !== "news");
+    if (panel === "news" && !newsLoaded) loadNews();
   });
 });
 

@@ -147,6 +147,151 @@ def finnhub_quote(symbol):
             "open": j.get("o"), "prev_close": j.get("pc")}
 
 
+# --- News (free headlines, keyword rules or optional cheap LLM pass) ------
+
+def fetch_market_news(limit=25):
+    key = os.environ["FINNHUB_API_KEY"]
+    j = http_json(f"https://finnhub.io/api/v1/news?category=general&token={key}")
+    out = []
+    for item in j[:limit]:
+        headline = item.get("headline") or ""
+        if not headline:
+            continue
+        out.append({"headline": headline, "source": item.get("source", ""),
+                     "url": item.get("url", ""), "ts": item.get("datetime")})
+    return out
+
+
+NEWS_POSITIVE_TERMS = (
+    "rate cut", "stimulus", "surge", "rally", "record high", "upgrade",
+    "buyback", "beats estimates", "strong earnings", "expansion", "deal",
+    "agreement", "ceasefire", "resolved", "growth", "profit jumps",
+)
+NEWS_NEGATIVE_TERMS = (
+    "war", "crash", "plunge", "recession", "rate hike", "default",
+    "bankruptcy", "sanctions", "ban", "tariff", "shutdown", "layoffs",
+    "downgrade", "crisis", "conflict", "attack", "sell-off", "selloff",
+    "slump", "misses estimates", "inflation surge",
+)
+NEWS_HIGH_IMPACT_TERMS = (
+    "rbi", "federal reserve", " fed ", "war", "crash", "recession",
+    "default", "sanctions", "ceasefire", "rate hike", "rate cut",
+    "geopolitical", "election", "tariff", "opec",
+)
+NEWS_MEDIUM_IMPACT_TERMS = (
+    "earnings", "gdp", "cpi", "jobs report", "ipo", "merger",
+    "acquisition", "quarterly results", "guidance", "inflation",
+)
+
+
+def keyword_score_headline(headline):
+    """Deterministic fallback when no LLM key is configured (or the LLM
+    call fails) — same if/else philosophy as every other check on this
+    dashboard, just applied per-headline instead of per-number."""
+    text = f" {headline.lower()} "
+    pos = sum(1 for t in NEWS_POSITIVE_TERMS if t in text)
+    neg = sum(1 for t in NEWS_NEGATIVE_TERMS if t in text)
+    sentiment = "negative" if neg > pos else ("positive" if pos > neg else "neutral")
+    if any(t in text for t in NEWS_HIGH_IMPACT_TERMS):
+        impact = "high"
+    elif any(t in text for t in NEWS_MEDIUM_IMPACT_TERMS):
+        impact = "medium"
+    else:
+        impact = "low"
+    return sentiment, impact
+
+
+NEWS_LLM_MODEL = "deepseek/deepseek-v4-flash"  # a classification pass over
+                                                 # ~25 headlines is cheap,
+                                                 # low-stakes work — no need
+                                                 # for a pricier model here
+
+
+def openrouter_classify_news(items):
+    """One batched call classifying every headline at once (not one call
+    per headline) — keeps this to a single cheap request per news refresh.
+    Raises on any failure; caller falls back to keyword_score_headline."""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("no OPENROUTER_API_KEY configured")
+    numbered = "\n".join(f"{i + 1}. {it['headline']}" for i, it in enumerate(items))
+    prompt = (
+        "You are a financial news classifier for India's NIFTY 50 index. "
+        "For each numbered headline below, judge whether it's likely to "
+        "materially affect NIFTY 50 today.\n\n"
+        "Respond with ONLY a JSON array (no prose, no markdown fences), "
+        "one object per headline, in the same order:\n"
+        '[{"sentiment":"positive|negative|neutral","impact":"high|medium|low","reason":"<8 words>"}]\n\n'
+        f"Headlines:\n{numbered}"
+    )
+    resp = http_post_json(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {"model": NEWS_LLM_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0},
+        headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
+    content = resp["choices"][0]["message"]["content"].strip()
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+    parsed = json.loads(content)
+    if not isinstance(parsed, list) or len(parsed) != len(items):
+        raise RuntimeError(f"classification shape mismatch (got {len(parsed) if isinstance(parsed, list) else type(parsed)})")
+    return parsed
+
+
+def score_news(items):
+    """Mutates each item in place with sentiment/impact/reason/method,
+    preferring one batched LLM classification pass and falling back to
+    plain keyword rules if no key is set or the call fails for any
+    reason (bad JSON, rate limit, network) — the feature must never go
+    dark just because the LLM path had a bad day."""
+    try:
+        classified = openrouter_classify_news(items)
+        for it, cl in zip(items, classified):
+            it["sentiment"] = cl.get("sentiment", "neutral")
+            it["impact"] = cl.get("impact", "low")
+            it["reason"] = cl.get("reason", "")
+            it["method"] = "AI"
+    except Exception:
+        for it in items:
+            sentiment, impact = keyword_score_headline(it["headline"])
+            it["sentiment"] = sentiment
+            it["impact"] = impact
+            it["reason"] = "keyword match"
+            it["method"] = "rules"
+    return items
+
+
+def aggregate_news_sentiment(items):
+    pos = sum(1 for i in items if i["sentiment"] == "positive")
+    neg = sum(1 for i in items if i["sentiment"] == "negative")
+    high_impact = [i for i in items if i["impact"] == "high"]
+    if neg > pos and high_impact:
+        overall, cls = "Negative", "down"
+    elif pos > neg and high_impact:
+        overall, cls = "Positive", "up"
+    elif neg > pos:
+        overall, cls = "Slightly negative", "down"
+    elif pos > neg:
+        overall, cls = "Slightly positive", "up"
+    else:
+        overall, cls = "Mixed / neutral", "flat"
+    return {"overall": overall, "class": cls, "positive": pos, "negative": neg,
+            "neutral": len(items) - pos - neg, "high_impact_count": len(high_impact)}
+
+
+def build_news():
+    items = fetch_market_news()
+    score_news(items)
+    method = items[0]["method"] if items else "rules"
+    return {
+        "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "items": items,
+        "sentiment": aggregate_news_sentiment(items),
+        "method": method,
+    }
+
+
 def twelvedata(symbol):
     key = os.environ["TWELVEDATA_API_KEY"]
     j = http_json(f"https://api.twelvedata.com/time_series?symbol={urllib.parse.quote(symbol)}"
@@ -922,6 +1067,23 @@ def _refresh_loop():
         time.sleep(REFRESH_SECONDS)
 
 
+NEWS_REFRESH_SECONDS = 300  # news doesn't need per-2s freshness, and this
+                            # keeps both Finnhub's free-tier quota and (if
+                            # configured) LLM classification cost trivial
+
+
+def _news_loop():
+    while True:
+        try:
+            snap = build_news()
+            with CACHE_LOCK:
+                CACHE["news"] = snap
+        except Exception as exc:
+            with CACHE_LOCK:
+                CACHE["news_error"] = str(exc)
+        time.sleep(NEWS_REFRESH_SECONDS)
+
+
 # Angel One instruments the fast tick loop refreshes: (card id, exchange,
 # symboltoken, check id or None if this instrument has no "checks" entry).
 ANGEL_TICK_INSTRUMENTS = [
@@ -1045,6 +1207,22 @@ class Handler(BaseHTTPRequestHandler):
                             "build": BUILD_COMMIT, "build_started": BUILD_STARTED}
             body = json.dumps(snap).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
+        elif path == "/api/news":
+            with CACHE_LOCK:
+                snap = dict(CACHE.get("news") or {})
+            if not snap:
+                try:
+                    snap = build_news()
+                    with CACHE_LOCK:
+                        CACHE["news"] = snap
+                except Exception as exc:
+                    snap = {"error": str(exc), "items": [],
+                            "sentiment": {"overall": "Unavailable", "class": "flat",
+                                          "positive": 0, "negative": 0, "neutral": 0,
+                                          "high_impact_count": 0},
+                            "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
+            body = json.dumps(snap).encode("utf-8")
+            self._send(HTTPStatus.OK, body, "application/json")
         elif path == "/health":
             self._send(HTTPStatus.OK, b'{"status":"ok"}', "application/json")
         else:
@@ -1055,6 +1233,7 @@ def main():
     global BUILD_STARTED
     BUILD_STARTED = ist_now().strftime("%Y-%m-%d %H:%M:%S")
     threading.Thread(target=_refresh_loop, daemon=True).start()
+    threading.Thread(target=_news_loop, daemon=True).start()
     threading.Thread(target=_angel_tick_loop, daemon=True).start()
     threading.Thread(target=_autoreload_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
