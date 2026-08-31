@@ -17,4 +17,12 @@ jobs:
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
             cd /opt/trade
+            # Self-heal a stale/corrupted origin/main ref before deploy.sh's
+            # own `git pull` runs — a plain pull fails hard on "cannot lock
+            # ref ... is at X but expected Y" instead of recovering.
+            git fetch origin main || {
+              echo "fetch failed, clearing stale ref and retrying"
+              rm -f .git/refs/remotes/origin/main
+              git fetch origin main
+            }
             sh deploy.sh
