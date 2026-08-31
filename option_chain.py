@@ -133,3 +133,79 @@ def build_summary(rows, pcr, max_pain, levels, strikes_info):
         "largest_put_add": strikes_info["put"]["largest_add"],
         "note": "Option-chain data alone is not a trade signal.",
     }
+
+
+def strike_shortlist(atm, all_strikes):
+    """3 candidates per direction (ITM/ATM/OTM), one strike-step either
+    side of ATM — a shortlist to investigate, never a pick. The caller is
+    always responsible for choosing manually."""
+    strikes = sorted(all_strikes)
+    if atm not in strikes:
+        return {"bullish": [], "bearish": []}
+    i = strikes.index(atm)
+    below = strikes[i - 1] if i > 0 else atm
+    above = strikes[i + 1] if i < len(strikes) - 1 else atm
+    return {
+        "bullish": [
+            {"strike": below, "side": "CE", "moneyness": "ITM"},
+            {"strike": atm, "side": "CE", "moneyness": "ATM"},
+            {"strike": above, "side": "CE", "moneyness": "OTM"},
+        ],
+        "bearish": [
+            {"strike": above, "side": "PE", "moneyness": "ITM"},
+            {"strike": atm, "side": "PE", "moneyness": "ATM"},
+            {"strike": below, "side": "PE", "moneyness": "OTM"},
+        ],
+    }
+
+
+def contract_quality(side):
+    """Deterministic, explainable quality read from liquidity + Greeks —
+    never a recommendation to trade this specific contract, just a
+    tradeability check (thin/wide-spread contracts are hard to exit)."""
+    if not side or side.get("ltp") is None:
+        return {"rating": "unknown", "reasons": []}
+    reasons = []
+    rating = "good"
+
+    def downgrade(to):
+        nonlocal rating
+        order = {"good": 0, "warn": 1, "bad": 2}
+        if order[to] > order[rating]:
+            rating = to
+
+    vol = side.get("volume") or 0
+    if vol < 1000:
+        reasons.append("very low volume"); downgrade("bad")
+    elif vol < 50000:
+        reasons.append("low volume"); downgrade("warn")
+
+    bid, ask, ltp = side.get("bid"), side.get("ask"), side.get("ltp")
+    if bid is not None and ask is not None and ltp:
+        spread_pct = (ask - bid) / ltp * 100
+        if spread_pct > 3:
+            reasons.append("wide bid/ask spread"); downgrade("bad")
+        elif spread_pct > 1:
+            reasons.append("moderate spread"); downgrade("warn")
+
+    delta = side.get("delta")
+    if delta is not None and abs(delta) < 0.15:
+        reasons.append("very low delta"); downgrade("warn")
+
+    iv = side.get("iv")
+    if iv is not None and iv > 30:
+        reasons.append("elevated IV"); downgrade("warn")
+
+    return {"rating": rating, "reasons": reasons}
+
+
+def chain_vs_trend(trend, pcr_read):
+    """Plain-language comparison of option-chain positioning against the
+    Trend tab's current read — never a trade signal, just tells you
+    whether the two agree."""
+    if not trend or trend == "sideways" or pcr_read in (None, "Unknown", "Mixed / neutral"):
+        return "Chain positioning is mixed or trend is sideways — no clear confirmation either way."
+    chain_dir = "bullish" if pcr_read == "Bullish-leaning" else "bearish"
+    if trend == chain_dir:
+        return f"Chain positioning aligns with the {trend} trend."
+    return f"Chain does not confirm the {trend} trend yet."

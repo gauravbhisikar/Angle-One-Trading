@@ -361,6 +361,35 @@
   .oc-level-bar { height: 100%; border-radius: 4px; }
   .oc-level-bar.up { background: var(--up); } .oc-level-bar.down { background: var(--down); }
   .oc-level-oi { width: 60px; text-align: right; color: var(--muted); flex: none; }
+  .oc-lot { display: block; font-size: 9.5px; color: var(--faint); font-weight: 400; }
+
+  .oc-trend-compare {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 20px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 18px; margin-bottom: 16px;
+  }
+  .oc-tc-row { display: flex; flex-direction: column; gap: 4px; }
+  .oc-tc-verdict { font-size: 12.5px; color: var(--text); font-weight: 500; flex: 1; min-width: 200px; }
+
+  .oc-shortlist { margin-bottom: 16px; }
+  .oc-shortlist-title {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--faint);
+    font-weight: 700; margin-bottom: 10px;
+  }
+  .oc-shortlist-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .oc-shortlist-col-title { font-size: 11px; font-weight: 700; letter-spacing: .5px; margin-bottom: 10px; }
+  .oc-shortlist-col-title.up { color: var(--up); } .oc-shortlist-col-title.down { color: var(--down); }
+  .oc-cand {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 10px;
+  }
+  .oc-cand-atm { border-color: var(--accent); background: var(--accent-bg); }
+  .oc-cand-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .oc-cand-strike { font-family: var(--mono); font-weight: 700; font-size: 13px; }
+  .oc-cand-moneyness { font-size: 10px; color: var(--muted); font-weight: 600; }
+  .oc-cand-body { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 6px; }
+  .oc-cand-body .tg-val { font-size: 12px; }
+  .oc-cand-quality { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); }
 
   .news-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; margin-top: 16px; }
   .news-card { gap: 8px; }
@@ -507,10 +536,12 @@
 
   <div id="panel-optionchain" class="hidden">
     <div id="ocHeader"></div>
+    <div id="ocSummary"></div>
+    <div id="ocTrendCompare"></div>
+    <div id="ocShortlist"></div>
     <div id="ocTable"></div>
     <div id="ocStrikeSummary"></div>
     <div id="ocLevels"></div>
-    <div id="ocSummary"></div>
   </div>
 </main>
 <footer>Free data sources: Finnhub · Twelve Data · Alpha Vantage · NSE · Yahoo Finance · TradingView · Angel One. For reference only — not investment advice.</footer>
@@ -1088,6 +1119,7 @@ function ocHeaderHTML(d) {
     <div class="oc-hitem"><span class="tg-label">ATM</span><span class="tg-val">${fmtPrice(d.atm)}</span></div>
     <div class="oc-hitem"><span class="tg-label">PCR</span><span class="tg-val">${d.pcr != null ? d.pcr : "—"}</span></div>
     <div class="oc-hitem"><span class="tg-label">MAX PAIN</span><span class="tg-val">${d.max_pain != null ? fmtPrice(d.max_pain) : "—"}</span></div>
+    <div class="oc-hitem"><span class="tg-label">LOT SIZE</span><span class="tg-val">${d.lot_size || "—"}</span></div>
   </div>`;
 }
 
@@ -1099,7 +1131,8 @@ function ocCell(side) {
     <td class="oc-num ${chgCls}">${side.oi_chg != null ? (side.oi_chg > 0 ? "+" : "") + side.oi_chg.toLocaleString("en-IN") : "—"}</td>
     <td class="oc-num">${side.volume != null ? side.volume.toLocaleString("en-IN") : "—"}</td>
     <td class="oc-num">${side.iv != null ? side.iv.toFixed(1) + "%" : "—"}</td>
-    <td class="oc-num oc-ltp">${side.ltp != null ? fmtPrice(side.ltp) : "—"}</td>`;
+    <td class="oc-num oc-ltp">${side.ltp != null ? fmtPrice(side.ltp) : "—"}${side.premium_per_lot != null
+      ? `<span class="oc-lot">₹${Math.round(side.premium_per_lot).toLocaleString("en-IN")}/lot</span>` : ""}</td>`;
 }
 
 function ocTableHTML(d) {
@@ -1187,6 +1220,69 @@ function ocSummaryHTML(d) {
   </div>`;
 }
 
+function ocTrendCompareHTML(d) {
+  const trend = d.current_trend;
+  const trendCls = trend === "bullish" ? "up" : trend === "bearish" ? "down" : "flat";
+  const trendEmoji = trend === "bullish" ? "🟢" : trend === "bearish" ? "🔴" : "🟡";
+  const s = d.summary || {};
+  const chainCls = s.pcr_read === "Bullish-leaning" ? "up" : s.pcr_read === "Bearish-leaning" ? "down" : "flat";
+  return `
+  <div class="oc-trend-compare">
+    <div class="oc-tc-row">
+      <span class="tg-label">NIFTY TREND</span>
+      <span class="tg-val ${trendCls}">${trendEmoji} ${esc((trend || "unknown").toUpperCase())}</span>
+    </div>
+    <div class="oc-tc-row">
+      <span class="tg-label">OPTION CHAIN</span>
+      <span class="tg-val ${chainCls}">${esc((s.pcr_read || "Unknown").toUpperCase())}</span>
+    </div>
+    <div class="oc-tc-verdict">${esc(d.chain_vs_trend || "")}</div>
+  </div>`;
+}
+
+function ocShortlistCard(cand) {
+  const data = cand.data;
+  const q = cand.quality || { rating: "unknown", reasons: [] };
+  const qIcon = q.rating === "good" ? "✅" : q.rating === "warn" ? "⚠️" : q.rating === "bad" ? "❌" : "—";
+  return `
+  <div class="oc-cand ${cand.moneyness === "ATM" ? "oc-cand-atm" : ""}">
+    <div class="oc-cand-head">
+      <span class="oc-cand-strike">${fmtPrice(cand.strike)} ${esc(cand.side)}</span>
+      <span class="oc-cand-moneyness">${esc(cand.moneyness)}${cand.moneyness === "ATM" ? " ⭐" : ""}</span>
+    </div>
+    ${data ? `
+    <div class="oc-cand-body">
+      <div><span class="tg-label">LTP</span><span class="tg-val">${data.ltp != null ? fmtPrice(data.ltp) : "—"}</span></div>
+      <div><span class="tg-label">Delta</span><span class="tg-val">${data.delta != null ? data.delta.toFixed(2) : "—"}</span></div>
+      <div><span class="tg-label">IV</span><span class="tg-val">${data.iv != null ? data.iv.toFixed(1) + "%" : "—"}</span></div>
+      <div><span class="tg-label">Theta</span><span class="tg-val">${data.theta != null ? data.theta.toFixed(1) : "—"}</span></div>
+      <div><span class="tg-label">Volume</span><span class="tg-val">${data.volume != null ? data.volume.toLocaleString("en-IN") : "—"}</span></div>
+      <div><span class="tg-label">Bid/Ask</span><span class="tg-val">${data.bid != null ? data.bid.toFixed(2) : "—"} / ${data.ask != null ? data.ask.toFixed(2) : "—"}</span></div>
+    </div>
+    <div class="oc-cand-quality">${qIcon} ${q.reasons.length ? esc(q.reasons.join(", ")) : "Looks tradeable"}</div>
+    ` : `<div class="oc-cand-body oc-empty">No data</div>`}
+  </div>`;
+}
+
+function ocShortlistHTML(d) {
+  const sl = d.shortlist || { bullish: [], bearish: [] };
+  if (!sl.bullish.length && !sl.bearish.length) return "";
+  return `
+  <div class="oc-shortlist">
+    <div class="oc-shortlist-title">STRIKE SHORTLIST — pick manually, this is not a recommendation</div>
+    <div class="oc-shortlist-cols">
+      <div class="oc-shortlist-col">
+        <div class="oc-shortlist-col-title up">IF BULLISH</div>
+        ${sl.bullish.map(ocShortlistCard).join("")}
+      </div>
+      <div class="oc-shortlist-col">
+        <div class="oc-shortlist-col-title down">IF BEARISH</div>
+        ${sl.bearish.map(ocShortlistCard).join("")}
+      </div>
+    </div>
+  </div>`;
+}
+
 async function loadOptionChain() {
   try {
     const res = await fetch("/api/optionchain", { cache: "no-store" });
@@ -1194,10 +1290,12 @@ async function loadOptionChain() {
     ocLoaded = true;
     document.getElementById("tabCountO").textContent = d.atm != null ? "•" : "–";
     document.getElementById("ocHeader").innerHTML = ocHeaderHTML(d);
+    document.getElementById("ocSummary").innerHTML = ocSummaryHTML(d);
+    document.getElementById("ocTrendCompare").innerHTML = ocTrendCompareHTML(d);
+    document.getElementById("ocShortlist").innerHTML = ocShortlistHTML(d);
     document.getElementById("ocTable").innerHTML = ocTableHTML(d);
     document.getElementById("ocStrikeSummary").innerHTML = ocStrikeSummaryHTML(d);
     document.getElementById("ocLevels").innerHTML = ocLevelsHTML(d);
-    document.getElementById("ocSummary").innerHTML = ocSummaryHTML(d);
   } catch (e) {
     document.getElementById("ocHeader").innerHTML = `<div class="errbanner">Could not load option chain — ${esc(e.message)}</div>`;
   }

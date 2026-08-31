@@ -713,9 +713,13 @@ def angelone_scrip_master():
             strike = float(r.get("strike", "-1")) / 100.0
         except (TypeError, ValueError):
             strike = -1.0
+        try:
+            lot_size = int(r.get("lotsize", "0") or 0)
+        except (TypeError, ValueError):
+            lot_size = 0
         instruments.append({
             "token": r.get("token"), "symbol": r.get("symbol"), "name": r.get("name"),
-            "expiry": r.get("expiry", ""), "strike": strike,
+            "expiry": r.get("expiry", ""), "strike": strike, "lot_size": lot_size,
             "instrument_type": r.get("instrumenttype", ""), "exchange": r.get("exch_seg", ""),
         })
     _SCRIP_MASTER_CACHE["date"] = today
@@ -723,9 +727,17 @@ def angelone_scrip_master():
     return instruments
 
 
-def nifty_option_expiries(instruments):
+def nifty_option_expiries(instruments, weekly_only=True):
     """Every distinct NIFTY OPTIDX expiry in the scrip master, as
-    (parsed_date, raw_string) tuples sorted soonest-first."""
+    (raw_string, parsed_date) tuples sorted soonest-first.
+
+    With weekly_only (the default), the monthly contract — the LAST
+    expiry listed within each calendar month, the standard convention
+    since Angel One's scrip master carries no explicit weekly/monthly
+    flag — is excluded, so callers always land on a weekly unless a
+    given month genuinely has only one expiry (e.g. right after a
+    monthly-only listing window), in which case it's kept rather than
+    returning nothing."""
     seen = {}
     for i in instruments:
         if i["exchange"] == "NFO" and i["instrument_type"] == "OPTIDX" and i["name"] == "NIFTY" and i["expiry"]:
@@ -734,7 +746,15 @@ def nifty_option_expiries(instruments):
                     seen[i["expiry"]] = datetime.strptime(i["expiry"], "%d%b%Y").date()
                 except ValueError:
                     continue
-    return sorted(seen.items(), key=lambda kv: kv[1])
+    pairs = sorted(seen.items(), key=lambda kv: kv[1])
+    if not weekly_only or len(pairs) <= 1:
+        return pairs
+    by_month = {}
+    for raw, d in pairs:
+        by_month.setdefault((d.year, d.month), []).append((raw, d))
+    monthly_raws = {max(v, key=lambda x: x[1])[0] for v in by_month.values()}
+    weeklies = [(raw, d) for raw, d in pairs if raw not in monthly_raws]
+    return weeklies or pairs
 
 
 def nifty_options_for_expiry(instruments, expiry):
@@ -1472,6 +1492,7 @@ def build_option_chain():
         raise RuntimeError(f"option_chain: no option instruments for expiry {expiry_str}")
 
     spot = _angelone_rate_limited_retry(lambda: angelone_ltp(headers, "NSE", "99926000"))
+    lot_size = next((o["lot_size"] for o in opts if o.get("lot_size")), 0)
 
     all_strikes = sorted({o["strike"] for o in opts})
     atm = option_chain.atm_strike(all_strikes, spot)
@@ -1512,6 +1533,7 @@ def build_option_chain():
                 "bid": q.get("bid"), "ask": q.get("ask"),
                 "delta": g.get("delta"), "gamma": g.get("gamma"),
                 "theta": g.get("theta"), "vega": g.get("vega"), "iv": g.get("iv"),
+                "premium_per_lot": (ltp * lot_size) if (ltp is not None and lot_size) else None,
                 "interpretation": option_chain.oi_interpretation(base["ltp"], ltp, base["oi"], oi),
             }
         rows.append(row)
@@ -1523,11 +1545,25 @@ def build_option_chain():
     summary = option_chain.build_summary(rows, pcr, max_pain, levels, strikes_info)
     dte = (expiry_date - ist_now().date()).days
 
+    rows_by_strike = {r["strike"]: r for r in rows}
+    shortlist = option_chain.strike_shortlist(atm, shown_strikes)
+    for direction in ("bullish", "bearish"):
+        for cand in shortlist[direction]:
+            side_data = (rows_by_strike.get(cand["strike"]) or {}).get(cand["side"].lower())
+            cand["data"] = side_data
+            cand["quality"] = option_chain.contract_quality(side_data)
+
+    with CACHE_LOCK:
+        trend_snap = CACHE.get("trend") or {}
+    current_trend = trend_snap.get("trend_15m")
+    chain_read = option_chain.chain_vs_trend(current_trend, summary["pcr_read"])
+
     return {
         "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
         "spot": spot, "expiry": expiry_date.isoformat(), "expiry_raw": expiry_str,
-        "dte": dte, "atm": atm, "rows": rows, "pcr": pcr, "max_pain": max_pain,
+        "dte": dte, "atm": atm, "lot_size": lot_size, "rows": rows, "pcr": pcr, "max_pain": max_pain,
         "levels": levels, "strikes_info": strikes_info, "summary": summary,
+        "shortlist": shortlist, "current_trend": current_trend, "chain_vs_trend": chain_read,
     }
 
 
@@ -1712,10 +1748,12 @@ class Handler(BaseHTTPRequestHandler):
                         CACHE["option_chain"] = snap
                 except Exception as exc:
                     snap = {"error": str(exc), "spot": None, "expiry": None, "dte": None,
-                            "atm": None, "rows": [], "pcr": None, "max_pain": None,
+                            "atm": None, "lot_size": None, "rows": [], "pcr": None, "max_pain": None,
                             "levels": {"resistance": [], "support": []},
                             "strikes_info": {"call": {}, "put": {}},
                             "summary": {"note": "Option-chain data alone is not a trade signal."},
+                            "shortlist": {"bullish": [], "bearish": []},
+                            "current_trend": None, "chain_vs_trend": None,
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
             body = json.dumps(snap).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
