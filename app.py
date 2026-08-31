@@ -630,7 +630,11 @@ def angelone_candles(headers, exchange, symboltoken, days=30, interval="ONE_DAY"
 
 
 def angelone_historical():
-    return angelone_candles(angelone_login(), "NSE", "99926000")
+    # angelone_session() (cached ~5min), never a fresh angelone_login() —
+    # this is called every 10s build_market() cycle; logging in fresh each
+    # time was itself tripping Angel One's rate limit (the same class of
+    # 403 as every other repeated-login issue fixed elsewhere this session).
+    return angelone_candles(angelone_session(), "NSE", "99926000")
 
 
 TREND_15M_DAYS = 45  # tunable — no confirmed Angel One max-range-per-request
@@ -793,7 +797,7 @@ def nifty_ohlc_and_trend():
     rows = None
     source = "Angel One"
     try:
-        rows = angelone_historical()
+        rows = _angelone_rate_limited_retry(angelone_historical)
     except Exception:
         pass
     if not rows:
@@ -831,8 +835,22 @@ def nifty_ohlc_and_trend():
         trend = "Sideways"
     pct = (c - prev_c) / prev_c * 100 if prev_c else 0.0
 
+    # Staleness check: is `yesterday` actually the most recent trading day,
+    # or is the data source (esp. the Yahoo fallback, which can lag NSE's
+    # real close by a day) stuck one or more sessions behind? Only weekends
+    # are accounted for (no NSE holiday calendar in this codebase) — a
+    # legitimate holiday will false-positive here, which is an acceptable
+    # false-alarm rate given the alternative is silently trusting wrong data.
+    today_date = ist_now().date()
+    expected = today_date - timedelta(days=1)
+    while expected.weekday() >= 5:
+        expected -= timedelta(days=1)
+    yesterday_date = datetime.strptime(yesterday["date"][:10], "%Y-%m-%d").date()
+    is_stale = yesterday_date < expected
+
     return {"source": source, "yesterday": yesterday, "last_close": last["close"],
-            "trend": trend, "trend_pct": pct}
+            "trend": trend, "trend_pct": pct,
+            "is_stale": is_stale, "expected_date": expected.isoformat()}
 
 
 def pick_change(cur, prev):
@@ -1029,6 +1047,11 @@ def build_market():
     nifty = nifty_ohlc_and_trend()
     if nifty:
         y = nifty["yesterday"]
+        if nifty.get("is_stale"):
+            warnings.append(
+                f"NIFTY prev-close data looks stale — using {y['date']} but expected "
+                f"{nifty['expected_date']} or later ({nifty['source']} may be lagging; "
+                f"GIFT gap and yesterday-levels figures below may be off)")
         add({"id": "nifty_ohlc", "title": "NIFTY — Yesterday",
              "value": fnum(y["close"]),
              "change": None, "change_text": f"{y['date']}",
