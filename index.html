@@ -292,6 +292,37 @@
   .hc-dist.breakout { color: var(--accent); font-weight: 600; }
   .hc-dist.muted { color: var(--muted); }
 
+  .chart-toolbar { display: flex; gap: 8px; margin: 16px 0 10px; }
+  .tf-btn {
+    font-size: 11px; font-weight: 600; padding: 6px 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer;
+  }
+  .tf-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+  #trendChart {
+    width: 100%; display: block; border: 1px solid var(--line); border-radius: 12px;
+    background: var(--surface); box-shadow: var(--shadow);
+  }
+  .trend-status .trend-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px; margin-top: 14px;
+  }
+  .trend-status .tg-label {
+    display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--faint); font-weight: 700; margin-bottom: 3px;
+  }
+  .trend-status .tg-val { font-size: 14px; font-weight: 600; font-family: var(--mono); color: var(--text); }
+  .trend-status .tg-val.up { color: var(--up); }
+  .trend-status .tg-val.down { color: var(--down); }
+  .trend-candle-status {
+    font-size: 11px; color: var(--muted); font-family: var(--mono);
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line);
+  }
+  .forming-tag {
+    font-size: 9px; font-weight: 700; letter-spacing: .5px; color: var(--amber);
+    background: var(--amber-bg); padding: 2px 6px; border-radius: 999px; margin-left: 4px;
+  }
+  .trend-stale .bias-verdict { color: var(--down); }
+
   .news-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; margin-top: 16px; }
   .news-card { gap: 8px; }
   .news-impact {
@@ -398,6 +429,7 @@
   <div class="tab active" data-panel="analysis">Analysis <span class="tcount" id="tabCountA">9</span></div>
   <div class="tab" data-panel="raw">Raw Data <span class="tcount" id="tabCountR">12</span></div>
   <div class="tab" data-panel="news">News <span class="tcount" id="tabCountN">0</span></div>
+  <div class="tab" data-panel="trend">Trend <span class="tcount" id="tabCountT">–</span></div>
 </div>
 
 <main>
@@ -422,6 +454,15 @@
   <div id="panel-news" class="hidden">
     <div id="newsSentiment"></div>
     <div id="newsList"></div>
+  </div>
+
+  <div id="panel-trend" class="hidden">
+    <div id="trendStatusPanel"></div>
+    <div class="chart-toolbar">
+      <button class="tf-btn active" data-tf="15m">15M</button>
+      <button class="tf-btn" data-tf="1h">1H</button>
+    </div>
+    <canvas id="trendChart"></canvas>
   </div>
 </main>
 <footer>Free data sources: Finnhub · Twelve Data · Alpha Vantage · NSE · Yahoo Finance · TradingView · Angel One. For reference only — not investment advice.</footer>
@@ -834,6 +875,152 @@ async function loadNews() {
   }
 }
 
+/* --- Trend Analysis tab (rule-based, no AI) --- */
+let trendLoaded = false;
+let trendData = null;
+let currentTrendTf = "15m";
+let _trendPollTimer = null;
+
+function trendStatusHTML(d) {
+  if (!d || d.error) {
+    return `<div class="errbanner">Could not load trend — ${esc((d && d.error) || "no data")}</div>`;
+  }
+  if (d.data_status === "stale") {
+    return `
+    <div class="bias down trend-stale">
+      <div class="bias-head"><span class="bias-verdict">⚠️ DATA STALE — trend analysis paused</span></div>
+      <div class="bias-note">Angel One candle data hasn't updated recently — showing the last known state below,
+      not advancing further until fresh data arrives. Never trust a stale read as live.</div>
+    </div>`;
+  }
+  const trend = d.trend_15m || "sideways";
+  const cls = trend === "bullish" ? "up" : trend === "bearish" ? "down" : "flat";
+  const emoji = d.reversal ? "⚠️" : trend === "bullish" ? "🟢" : trend === "bearish" ? "🔴" : "🟡";
+  const label = d.reversal ? "POSSIBLE REVERSAL" : trend.toUpperCase();
+  const forming = d[`forming_${currentTrendTf}`];
+  const lastCandles = d[`candles_${currentTrendTf}`] || [];
+  const lastClosed = lastCandles.length ? lastCandles[lastCandles.length - 1] : null;
+  const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—";
+  return `
+  <div class="bias trend-status ${cls}">
+    <div class="bias-head">
+      <span class="bias-verdict">${emoji} TREND: ${esc(label)}</span>
+    </div>
+    <div class="trend-grid">
+      <div><span class="tg-label">15M STRUCTURE</span><span class="tg-val">${(d.structure_sequence_15m || []).join(" → ") || "—"}</span></div>
+      <div><span class="tg-label">1H TREND</span><span class="tg-val">${esc((d.trend_1h || "—").toUpperCase())}</span></div>
+      <div><span class="tg-label">NEAREST SUPPORT</span><span class="tg-val up">${d.nearest_support != null ? fmtPrice(d.nearest_support) : "—"}</span></div>
+      <div><span class="tg-label">NEAREST RESISTANCE</span><span class="tg-val down">${d.nearest_resistance != null ? fmtPrice(d.nearest_resistance) : "—"}</span></div>
+      <div><span class="tg-label">INVALIDATION LEVEL</span><span class="tg-val">${d.invalidation_level != null ? fmtPrice(d.invalidation_level) : "—"}</span></div>
+    </div>
+    <div class="trend-candle-status">
+      Last closed candle: ${fmtTime(lastClosed && lastClosed.ts)}
+      ${forming ? `· Current candle: ${fmtTime(forming.open_ts)}–${fmtTime(forming.closes_at)} <span class="forming-tag">FORMING</span>` : ""}
+    </div>
+    <div class="bias-note">Rule-based structure analysis — no prediction, no buy/sell signal, recalculated on every closed candle.</div>
+  </div>`;
+}
+
+function drawTrendChart(canvas, data, tf) {
+  if (!canvas || !data) return;
+  const candles = data[`candles_${tf}`] || [];
+  if (!candles.length) return;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.clientWidth || 900, cssH = 420;
+  canvas.width = cssW * dpr; canvas.height = cssH * dpr;
+  canvas.style.height = cssH + "px";
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const style = getComputedStyle(document.documentElement);
+  const col = name => style.getPropertyValue(name).trim();
+  const upCol = col("--up"), downCol = col("--down"), accentCol = col("--accent"), amberCol = col("--amber"), textCol = col("--text");
+
+  const shown = candles.slice(-120);
+  const lo = Math.min(...shown.map(c => c.low));
+  const hi = Math.max(...shown.map(c => c.high));
+  const pad = (hi - lo) * 0.08 || 1;
+  const yMin = lo - pad, yMax = hi + pad;
+  const marginL = 60, marginR = 10, marginT = 10, marginB = 10;
+  const plotW = cssW - marginL - marginR, plotH = cssH - marginT - marginB;
+  const x = i => marginL + (i / Math.max(1, shown.length - 1)) * plotW;
+  const y = p => marginT + plotH - ((p - yMin) / (yMax - yMin)) * plotH;
+  const candleW = Math.max(2, plotW / shown.length * 0.6);
+
+  const zones = data[`zones_${tf}`] || [];
+  zones.forEach(z => {
+    const zc = z.kind === "support" ? upCol : downCol;
+    ctx.fillStyle = zc; ctx.globalAlpha = Math.min(0.22, 0.06 + z.strength / 40);
+    ctx.fillRect(marginL, y(z.hi), plotW, Math.max(1, y(z.lo) - y(z.hi)));
+    ctx.globalAlpha = 1;
+  });
+
+  shown.forEach((c, i) => {
+    const cx = x(i);
+    const up = c.close >= c.open;
+    ctx.strokeStyle = ctx.fillStyle = up ? upCol : downCol;
+    ctx.beginPath(); ctx.moveTo(cx, y(c.high)); ctx.lineTo(cx, y(c.low)); ctx.stroke();
+    const bodyTop = y(Math.max(c.open, c.close)), bodyBot = y(Math.min(c.open, c.close));
+    ctx.fillRect(cx - candleW / 2, bodyTop, candleW, Math.max(1, bodyBot - bodyTop));
+  });
+
+  const firstShownI = candles.length - shown.length;
+  const swings = (data[`swings_${tf}`] || []).filter(s => s.i >= firstShownI);
+  ctx.font = "10px " + col("--mono");
+  swings.forEach(s => {
+    const i = s.i - firstShownI;
+    const cx = x(i), cy = y(s.price);
+    ctx.fillStyle = accentCol;
+    ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI * 2); ctx.fill();
+  });
+
+  // y-axis price labels
+  ctx.fillStyle = textCol; ctx.font = "10px " + col("--mono"); ctx.textAlign = "right";
+  for (let k = 0; k <= 4; k++) {
+    const p = yMin + (yMax - yMin) * (k / 4);
+    ctx.fillText(fmtPrice(p), marginL - 6, y(p) + 3);
+  }
+  ctx.textAlign = "left";
+}
+
+function startTrendPolling() {
+  stopTrendPolling();
+  _trendPollTimer = setInterval(loadTrend, 45000);
+}
+function stopTrendPolling() {
+  if (_trendPollTimer) clearInterval(_trendPollTimer);
+  _trendPollTimer = null;
+}
+
+async function loadTrend() {
+  try {
+    const res = await fetch("/api/trend", { cache: "no-store" });
+    const d = await res.json();
+    trendLoaded = true;
+    trendData = d;
+    document.getElementById("tabCountT").textContent =
+      (d.breakouts_15m || []).length + (d.breakdowns_15m || []).length;
+    document.getElementById("trendStatusPanel").innerHTML = trendStatusHTML(d);
+    drawTrendChart(document.getElementById("trendChart"), d, currentTrendTf);
+  } catch (e) {
+    document.getElementById("trendStatusPanel").innerHTML =
+      `<div class="errbanner">Could not load trend — ${esc(e.message)}</div>`;
+  }
+}
+
+document.querySelectorAll(".tf-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tf-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    currentTrendTf = btn.dataset.tf;
+    if (trendData) {
+      document.getElementById("trendStatusPanel").innerHTML = trendStatusHTML(trendData);
+      drawTrendChart(document.getElementById("trendChart"), trendData, currentTrendTf);
+    }
+  });
+});
+
 document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
@@ -842,7 +1029,14 @@ document.querySelectorAll(".tab").forEach(t => {
     document.getElementById("panel-analysis").classList.toggle("hidden", panel !== "analysis");
     document.getElementById("panel-raw").classList.toggle("hidden", panel !== "raw");
     document.getElementById("panel-news").classList.toggle("hidden", panel !== "news");
+    document.getElementById("panel-trend").classList.toggle("hidden", panel !== "trend");
     if (panel === "news" && !newsLoaded) loadNews();
+    if (panel === "trend") {
+      if (!trendLoaded) loadTrend();
+      startTrendPolling();
+    } else {
+      stopTrendPolling();
+    }
   });
 });
 

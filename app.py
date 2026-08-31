@@ -33,6 +33,8 @@ from http import HTTPStatus
 from http.cookiejar import CookieJar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import trend_engine
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
@@ -601,21 +603,27 @@ def angelone_login():
     return dict(base_headers, Authorization=f"Bearer {token}")
 
 
-def angelone_candles(headers, exchange, symboltoken, days=30):
+def angelone_candles(headers, exchange, symboltoken, days=30, interval="ONE_DAY"):
     to = date.today()
     fr = to - timedelta(days=days)
     _angel_rate_gate()
     hist = http_post_json(
         "https://apiconnect.angelbroking.com/rest/secure/angelbroking/historical/v1/getCandleData",
-        {"exchange": exchange, "symboltoken": symboltoken, "interval": "ONE_DAY",
+        {"exchange": exchange, "symboltoken": symboltoken, "interval": interval,
          "fromdate": fr.strftime("%Y-%m-%d 09:15"), "todate": to.strftime("%Y-%m-%d 15:30")},
         headers=headers, timeout=20)
     rows = hist.get("data") or []
     parsed = []
     for r in rows:
         if isinstance(r, list) and len(r) >= 5:
-            parsed.append({"date": r[0][:10], "open": float(r[1]), "high": float(r[2]),
-                           "low": float(r[3]), "close": float(r[4])})
+            # Full ISO timestamp kept (not truncated to date-only) — 15m/1h
+            # candles need the time component; existing daily-trend string
+            # comparisons (nifty_ohlc_and_trend, angelone_live_and_prev)
+            # stay correct since lexicographic order on a shared
+            # YYYY-MM-DD... prefix is stable regardless of what follows it.
+            parsed.append({"date": r[0], "open": float(r[1]), "high": float(r[2]),
+                           "low": float(r[3]), "close": float(r[4]),
+                           "volume": float(r[5]) if len(r) > 5 else 0.0})
     if not parsed:
         raise RuntimeError("angelone: no rows")
     return parsed
@@ -623,6 +631,41 @@ def angelone_candles(headers, exchange, symboltoken, days=30):
 
 def angelone_historical():
     return angelone_candles(angelone_login(), "NSE", "99926000")
+
+
+TREND_15M_DAYS = 45  # tunable — no confirmed Angel One max-range-per-request
+TREND_1H_DAYS = 90   # limit exists in this repo; see _fetch_with_range_backoff
+
+
+def _fetch_with_range_backoff(fetch_fn, days, min_days=5):
+    """Halves the requested day-range on a range-rejection error instead of
+    assuming a hardcoded ceiling — no confirmed Angel One limit exists in
+    this repo (the '98 days' figure elsewhere in the codebase was an
+    empirical Yahoo-source observation from a different feature, not a
+    confirmed Angel One limit)."""
+    d = days
+    last_err = None
+    while d >= min_days:
+        try:
+            return fetch_fn(d)
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "no rows" in msg or "range" in msg:
+                last_err = exc
+                d //= 2
+                continue
+            raise
+    raise RuntimeError(f"angelone: no usable range down to {min_days} days") from last_err
+
+
+def angelone_intraday_15m(headers, exchange="NSE", symboltoken="99926000", days=TREND_15M_DAYS):
+    return _fetch_with_range_backoff(
+        lambda d: angelone_candles(headers, exchange, symboltoken, days=d, interval="FIFTEEN_MINUTE"), days)
+
+
+def angelone_intraday_1h(headers, exchange="NSE", symboltoken="99926000", days=TREND_1H_DAYS):
+    return _fetch_with_range_backoff(
+        lambda d: angelone_candles(headers, exchange, symboltoken, days=d, interval="ONE_HOUR"), days)
 
 
 def angelone_ltp(headers, exchange, symboltoken):
@@ -1192,6 +1235,92 @@ def _news_loop():
         time.sleep(NEWS_REFRESH_SECONDS)
 
 
+# --------------------------------------------------------------------------
+# NIFTY trend analysis (Angel One -> trend_engine.py -> chart/UI)
+# --------------------------------------------------------------------------
+
+TREND_REFRESH_SECONDS = 90
+TREND_STALE_MULTIPLIER = 2  # candle considered stale after this many missed
+                             # intervals of no new closed candle
+
+_TREND_CFG = dict(trend_engine.DEFAULT_CONFIG)
+_LIVE_TREND_STATE = {"15m": trend_engine.TrendState(_TREND_CFG),
+                      "1h": trend_engine.TrendState(_TREND_CFG)}
+_TREND_INTERVAL_SECONDS = {"15m": 15 * 60, "1h": 60 * 60}
+
+
+def _forming_candle(tf, last_closed_ts, current_price):
+    """The currently-open, not-yet-closed candle — monitoring-only, never
+    fed into the Analysis engine. Boundaries derived from the last closed
+    candle's timestamp plus the timeframe's own spacing, not from wall-clock
+    alone, so it stays correct across market close/reopen gaps."""
+    if last_closed_ts is None or current_price is None:
+        return None
+    span = _TREND_INTERVAL_SECONDS[tf]
+    open_ts = last_closed_ts + span
+    return {"open_ts": open_ts, "closes_at": open_ts + span, "last_price": current_price}
+
+
+def build_trend():
+    headers = angelone_session()
+    raw15 = _angelone_rate_limited_retry(lambda: angelone_intraday_15m(headers))
+    raw60 = _angelone_rate_limited_retry(lambda: angelone_intraday_1h(headers))
+    c15 = trend_engine.normalize_candles(raw15, "15m")
+    c60 = trend_engine.normalize_candles(raw60, "1h")
+
+    try:
+        current_price = _angelone_rate_limited_retry(lambda: angelone_ltp(headers, "NSE", "99926000"))
+    except Exception:
+        current_price = None
+
+    now = time.time()
+    stale = {}
+    forming = {}
+    for tf, candles in (("15m", c15), ("1h", c60)):
+        last_ts = candles[-1]["ts"] if candles else None
+        stale[tf] = last_ts is None or (now - last_ts) > _TREND_INTERVAL_SECONDS[tf] * TREND_STALE_MULTIPLIER
+        forming[tf] = _forming_candle(tf, last_ts, current_price)
+
+    data_status = "stale" if (stale["15m"] or stale["1h"]) else "live"
+
+    if data_status == "live":
+        trend_engine.advance_live_trend(_LIVE_TREND_STATE["15m"], c15)
+        trend_engine.advance_live_trend(_LIVE_TREND_STATE["1h"], c60)
+
+    snap15 = trend_engine.snapshot(_LIVE_TREND_STATE["15m"])
+    snap60 = trend_engine.snapshot(_LIVE_TREND_STATE["1h"])
+
+    return {
+        "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "data_status": data_status,
+        "trend_15m": snap15["trend"], "trend_1h": snap60["trend"],
+        "reversal": snap15["reversal"],
+        "structure_sequence_15m": snap15["structure_sequence"],
+        "structure_sequence_1h": snap60["structure_sequence"],
+        "swings_15m": snap15["swings"], "swings_1h": snap60["swings"],
+        "zones_15m": snap15["zones"], "zones_1h": snap60["zones"],
+        "breakouts_15m": snap15["breakouts"], "breakdowns_15m": snap15["breakdowns"],
+        "retests_15m": snap15["retests"],
+        "nearest_support": snap15["nearest_support"], "nearest_resistance": snap15["nearest_resistance"],
+        "invalidation_level": snap15["invalidation_level"],
+        "candles_15m": snap15["candles"], "candles_1h": snap60["candles"],
+        "forming_15m": forming["15m"], "forming_1h": forming["1h"],
+        "config": snap15["config"],
+    }
+
+
+def _trend_loop():
+    while True:
+        try:
+            snap = build_trend()
+            with CACHE_LOCK:
+                CACHE["trend"] = snap
+        except Exception as exc:
+            with CACHE_LOCK:
+                CACHE["trend_error"] = str(exc)
+        time.sleep(TREND_REFRESH_SECONDS)
+
+
 # Angel One instruments the fast tick loop refreshes: (card id, exchange,
 # symboltoken, check id or None if this instrument has no "checks" entry).
 ANGEL_TICK_INSTRUMENTS = [
@@ -1331,6 +1460,26 @@ class Handler(BaseHTTPRequestHandler):
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
             body = json.dumps(snap).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
+        elif path == "/api/trend":
+            with CACHE_LOCK:
+                snap = dict(CACHE.get("trend") or {})
+            if not snap:
+                try:
+                    snap = build_trend()
+                    with CACHE_LOCK:
+                        CACHE["trend"] = snap
+                except Exception as exc:
+                    snap = {"error": str(exc), "data_status": "stale",
+                            "trend_15m": None, "trend_1h": None, "reversal": None,
+                            "structure_sequence_15m": [], "structure_sequence_1h": [],
+                            "swings_15m": [], "swings_1h": [], "zones_15m": [], "zones_1h": [],
+                            "breakouts_15m": [], "breakdowns_15m": [], "retests_15m": [],
+                            "nearest_support": None, "nearest_resistance": None,
+                            "invalidation_level": None, "candles_15m": [], "candles_1h": [],
+                            "forming_15m": None, "forming_1h": None,
+                            "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
+            body = json.dumps(snap).encode("utf-8")
+            self._send(HTTPStatus.OK, body, "application/json")
         elif path == "/health":
             self._send(HTTPStatus.OK, b'{"status":"ok"}', "application/json")
         else:
@@ -1342,6 +1491,7 @@ def main():
     BUILD_STARTED = ist_now().strftime("%Y-%m-%d %H:%M:%S")
     threading.Thread(target=_refresh_loop, daemon=True).start()
     threading.Thread(target=_news_loop, daemon=True).start()
+    threading.Thread(target=_trend_loop, daemon=True).start()
     threading.Thread(target=_angel_tick_loop, daemon=True).start()
     threading.Thread(target=_autoreload_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
