@@ -34,6 +34,7 @@ from http.cookiejar import CookieJar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import trend_engine
+import option_chain
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -693,6 +694,107 @@ def angelone_ltp(headers, exchange, symboltoken):
     return float(fetched[0]["ltp"])
 
 
+SCRIP_MASTER_URL = "https://margincalculator.angelbroking.com/OpenAPI_File/files/OpenAPIScripMaster.json"
+_SCRIP_MASTER_CACHE = {"date": None, "instruments": None}
+
+
+def angelone_scrip_master():
+    """Angel One's full instrument master — free, no login required, ~35MB.
+    Cached in memory for the whole trading day (the instrument list doesn't
+    change intraday) so this large download only happens once/day, not
+    every option-chain refresh cycle."""
+    today = ist_now().date().isoformat()
+    if _SCRIP_MASTER_CACHE["date"] == today and _SCRIP_MASTER_CACHE["instruments"] is not None:
+        return _SCRIP_MASTER_CACHE["instruments"]
+    raw = http_json(SCRIP_MASTER_URL, timeout=60)
+    instruments = []
+    for r in raw:
+        try:
+            strike = float(r.get("strike", "-1")) / 100.0
+        except (TypeError, ValueError):
+            strike = -1.0
+        instruments.append({
+            "token": r.get("token"), "symbol": r.get("symbol"), "name": r.get("name"),
+            "expiry": r.get("expiry", ""), "strike": strike,
+            "instrument_type": r.get("instrumenttype", ""), "exchange": r.get("exch_seg", ""),
+        })
+    _SCRIP_MASTER_CACHE["date"] = today
+    _SCRIP_MASTER_CACHE["instruments"] = instruments
+    return instruments
+
+
+def nifty_option_expiries(instruments):
+    """Every distinct NIFTY OPTIDX expiry in the scrip master, as
+    (parsed_date, raw_string) tuples sorted soonest-first."""
+    seen = {}
+    for i in instruments:
+        if i["exchange"] == "NFO" and i["instrument_type"] == "OPTIDX" and i["name"] == "NIFTY" and i["expiry"]:
+            if i["expiry"] not in seen:
+                try:
+                    seen[i["expiry"]] = datetime.strptime(i["expiry"], "%d%b%Y").date()
+                except ValueError:
+                    continue
+    return sorted(seen.items(), key=lambda kv: kv[1])
+
+
+def nifty_options_for_expiry(instruments, expiry):
+    return [i for i in instruments
+            if i["exchange"] == "NFO" and i["instrument_type"] == "OPTIDX"
+            and i["name"] == "NIFTY" and i["expiry"] == expiry]
+
+
+def angelone_full_quotes(headers, exchange, tokens):
+    """FULL-mode batch quote — LTP + open interest + volume + bid/ask depth
+    in one call per <=50-token chunk (Angel One's documented cap)."""
+    out = {}
+    for i in range(0, len(tokens), 50):
+        chunk = tokens[i:i + 50]
+        _angel_rate_gate()
+        resp = http_post_json(
+            "https://apiconnect.angelbroking.com/rest/secure/angelbroking/market/v1/quote",
+            {"mode": "FULL", "exchangeTokens": {exchange: chunk}},
+            headers=headers, timeout=20)
+        for f in ((resp.get("data") or {}).get("fetched")) or []:
+            depth = f.get("depth") or {}
+            best_buy = (depth.get("buy") or [{}])[0].get("price")
+            best_sell = (depth.get("sell") or [{}])[0].get("price")
+            out[f.get("symbolToken")] = {
+                "ltp": f.get("ltp"), "oi": f.get("opnInterest"),
+                "volume": f.get("tradeVolume"), "bid": best_buy, "ask": best_sell,
+            }
+    return out
+
+
+def angelone_option_greeks(headers, name, expiry):
+    """Delta/Gamma/Theta/Vega/IV for every strike of one underlying's
+    expiry, in one call — Angel One's dedicated Greeks endpoint (the plain
+    quote endpoint above carries OI/LTP but not IV/Greeks)."""
+    _angel_rate_gate()
+    resp = http_post_json(
+        "https://apiconnect.angelbroking.com/rest/secure/angelbroking/marketData/v1/optionGreek",
+        {"name": name, "expirydate": expiry},
+        headers=headers, timeout=20)
+    out = {}
+    for d in resp.get("data") or []:
+        try:
+            strike = float(d.get("strikePrice", 0))
+        except (TypeError, ValueError):
+            continue
+        out[(strike, d.get("optionType"))] = {
+            "delta": _safe_float(d.get("delta")), "gamma": _safe_float(d.get("gamma")),
+            "theta": _safe_float(d.get("theta")), "vega": _safe_float(d.get("vega")),
+            "iv": _safe_float(d.get("impliedVolatility")),
+        }
+    return out
+
+
+def _safe_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _angelone_rate_limited_retry(fn):
     """Angel One's rate ceiling isn't a hard 1/sec — network jitter can still
     land two calls in the same window even with a fixed sleep between them,
@@ -1344,6 +1446,103 @@ def _trend_loop():
         time.sleep(TREND_REFRESH_SECONDS)
 
 
+# --------------------------------------------------------------------------
+# Option chain (Angel One -> option_chain.py -> UI). Positioning read only —
+# never a buy/sell signal, never a NIFTY-direction prediction by itself.
+# --------------------------------------------------------------------------
+
+OPTION_CHAIN_REFRESH_SECONDS = 90
+OPTION_CHAIN_STRIKE_WINDOW = 5  # ATM +/- this many strikes
+
+# Day-open OI/LTP baseline per (strike, side) — "OI change" and the
+# long/short buildup interpretation are both measured against the first
+# reading captured each trading day, reset when the date rolls over.
+_OPTION_CHAIN_BASELINE = {"date": None, "data": {}}
+
+
+def build_option_chain():
+    headers = angelone_session()
+    instruments = angelone_scrip_master()
+    expiries = nifty_option_expiries(instruments)
+    if not expiries:
+        raise RuntimeError("option_chain: no NIFTY expiries found in scrip master")
+    expiry_str, expiry_date = expiries[0]
+    opts = nifty_options_for_expiry(instruments, expiry_str)
+    if not opts:
+        raise RuntimeError(f"option_chain: no option instruments for expiry {expiry_str}")
+
+    spot = _angelone_rate_limited_retry(lambda: angelone_ltp(headers, "NSE", "99926000"))
+
+    all_strikes = sorted({o["strike"] for o in opts})
+    atm = option_chain.atm_strike(all_strikes, spot)
+    shown_strikes = option_chain.strikes_around_atm(all_strikes, atm, n=OPTION_CHAIN_STRIKE_WINDOW)
+
+    shown_opts = [o for o in opts if o["strike"] in shown_strikes]
+    tokens = [o["token"] for o in shown_opts]
+    quotes = _angelone_rate_limited_retry(lambda: angelone_full_quotes(headers, "NFO", tokens))
+    try:
+        greeks = _angelone_rate_limited_retry(lambda: angelone_option_greeks(headers, "NIFTY", expiry_str))
+    except Exception:
+        greeks = {}
+
+    today = ist_now().date().isoformat()
+    if _OPTION_CHAIN_BASELINE["date"] != today:
+        _OPTION_CHAIN_BASELINE["date"] = today
+        _OPTION_CHAIN_BASELINE["data"] = {}
+    baseline = _OPTION_CHAIN_BASELINE["data"]
+
+    rows = []
+    for strike in shown_strikes:
+        row = {"strike": strike, "ce": None, "pe": None}
+        for o in shown_opts:
+            if o["strike"] != strike:
+                continue
+            side = "ce" if o["symbol"].endswith("CE") else "pe"
+            q = quotes.get(o["token"]) or {}
+            oi = q.get("oi") or 0
+            ltp = q.get("ltp")
+            key = (strike, side)
+            if key not in baseline:
+                baseline[key] = {"oi": oi, "ltp": ltp}
+            base = baseline[key]
+            oi_chg = oi - base["oi"]
+            g = greeks.get((strike, "CE" if side == "ce" else "PE")) or {}
+            row[side] = {
+                "ltp": ltp, "oi": oi, "oi_chg": oi_chg, "volume": q.get("volume"),
+                "bid": q.get("bid"), "ask": q.get("ask"),
+                "delta": g.get("delta"), "gamma": g.get("gamma"),
+                "theta": g.get("theta"), "vega": g.get("vega"), "iv": g.get("iv"),
+                "interpretation": option_chain.oi_interpretation(base["ltp"], ltp, base["oi"], oi),
+            }
+        rows.append(row)
+
+    pcr = option_chain.compute_pcr(rows)
+    max_pain = option_chain.compute_max_pain(rows)
+    levels = option_chain.levels_from_oi(rows)
+    strikes_info = option_chain.strike_summary(rows)
+    summary = option_chain.build_summary(rows, pcr, max_pain, levels, strikes_info)
+    dte = (expiry_date - ist_now().date()).days
+
+    return {
+        "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "spot": spot, "expiry": expiry_date.isoformat(), "expiry_raw": expiry_str,
+        "dte": dte, "atm": atm, "rows": rows, "pcr": pcr, "max_pain": max_pain,
+        "levels": levels, "strikes_info": strikes_info, "summary": summary,
+    }
+
+
+def _option_chain_loop():
+    while True:
+        try:
+            snap = build_option_chain()
+            with CACHE_LOCK:
+                CACHE["option_chain"] = snap
+        except Exception as exc:
+            with CACHE_LOCK:
+                CACHE["option_chain_error"] = str(exc)
+        time.sleep(OPTION_CHAIN_REFRESH_SECONDS)
+
+
 # Angel One instruments the fast tick loop refreshes: (card id, exchange,
 # symboltoken, check id or None if this instrument has no "checks" entry).
 ANGEL_TICK_INSTRUMENTS = [
@@ -1503,6 +1702,23 @@ class Handler(BaseHTTPRequestHandler):
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
             body = json.dumps(snap).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
+        elif path == "/api/optionchain":
+            with CACHE_LOCK:
+                snap = dict(CACHE.get("option_chain") or {})
+            if not snap:
+                try:
+                    snap = build_option_chain()
+                    with CACHE_LOCK:
+                        CACHE["option_chain"] = snap
+                except Exception as exc:
+                    snap = {"error": str(exc), "spot": None, "expiry": None, "dte": None,
+                            "atm": None, "rows": [], "pcr": None, "max_pain": None,
+                            "levels": {"resistance": [], "support": []},
+                            "strikes_info": {"call": {}, "put": {}},
+                            "summary": {"note": "Option-chain data alone is not a trade signal."},
+                            "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
+            body = json.dumps(snap).encode("utf-8")
+            self._send(HTTPStatus.OK, body, "application/json")
         elif path == "/health":
             self._send(HTTPStatus.OK, b'{"status":"ok"}', "application/json")
         else:
@@ -1515,6 +1731,7 @@ def main():
     threading.Thread(target=_refresh_loop, daemon=True).start()
     threading.Thread(target=_news_loop, daemon=True).start()
     threading.Thread(target=_trend_loop, daemon=True).start()
+    threading.Thread(target=_option_chain_loop, daemon=True).start()
     threading.Thread(target=_angel_tick_loop, daemon=True).start()
     threading.Thread(target=_autoreload_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)

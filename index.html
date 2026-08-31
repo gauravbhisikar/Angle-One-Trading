@@ -323,6 +323,45 @@
   }
   .trend-stale .bias-verdict { color: var(--down); }
 
+  .oc-header {
+    display: flex; flex-wrap: wrap; gap: 22px; padding: 16px 20px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    margin-bottom: 16px; box-shadow: var(--shadow);
+  }
+  .oc-hitem { display: flex; flex-direction: column; gap: 4px; }
+  .oc-table-wrap { overflow-x: auto; margin-bottom: 16px; }
+  .oc-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 12px; background: var(--surface); border-radius: 12px; overflow: hidden; }
+  .oc-table th, .oc-table td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--line); }
+  .oc-table thead th { font-size: 9px; text-transform: uppercase; letter-spacing: .6px; color: var(--faint); font-weight: 700; }
+  .oc-side-label { text-align: center !important; font-size: 11px !important; letter-spacing: 1px; }
+  .oc-side-label.ce { color: var(--up); }
+  .oc-side-label.pe { color: var(--down); }
+  .oc-strike { text-align: center; font-weight: 700; background: var(--surface2); }
+  .oc-atm .oc-strike { color: var(--accent); background: var(--accent-bg); }
+  .oc-atm td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .oc-ltp { font-weight: 700; color: var(--text); }
+  .oc-empty { text-align: center; color: var(--faint); }
+  .oc-num.up { color: var(--up); } .oc-num.down { color: var(--down); } .oc-num.flat { color: var(--muted); }
+
+  .oc-strike-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  .oc-side-block { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .oc-side-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; margin-bottom: 10px; }
+  .oc-side-block.ce .oc-side-title { color: var(--up); }
+  .oc-side-block.pe .oc-side-title { color: var(--down); }
+  .oc-sum-line { display: flex; justify-content: space-between; padding: 4px 0; }
+
+  .oc-levels { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+  .oc-levels-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--faint); font-weight: 700; margin-bottom: 10px; }
+  .oc-level-group { margin-bottom: 10px; }
+  .oc-level-label { display: block; font-size: 10.5px; font-weight: 600; margin-bottom: 6px; }
+  .oc-level-label.up { color: var(--up); } .oc-level-label.down { color: var(--down); }
+  .oc-level-row { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; font-family: var(--mono); font-size: 11px; }
+  .oc-level-strike { width: 70px; flex: none; }
+  .oc-level-bar-track { flex: 1; height: 8px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+  .oc-level-bar { height: 100%; border-radius: 4px; }
+  .oc-level-bar.up { background: var(--up); } .oc-level-bar.down { background: var(--down); }
+  .oc-level-oi { width: 60px; text-align: right; color: var(--muted); flex: none; }
+
   .news-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; margin-top: 16px; }
   .news-card { gap: 8px; }
   .news-impact {
@@ -430,6 +469,7 @@
   <div class="tab" data-panel="raw">Raw Data <span class="tcount" id="tabCountR">12</span></div>
   <div class="tab" data-panel="news">News <span class="tcount" id="tabCountN">0</span></div>
   <div class="tab" data-panel="trend">Trend <span class="tcount" id="tabCountT">–</span></div>
+  <div class="tab" data-panel="optionchain">Option Chain <span class="tcount" id="tabCountO">–</span></div>
 </div>
 
 <main>
@@ -463,6 +503,14 @@
       <button class="tf-btn" data-tf="1h">1H</button>
     </div>
     <canvas id="trendChart"></canvas>
+  </div>
+
+  <div id="panel-optionchain" class="hidden">
+    <div id="ocHeader"></div>
+    <div id="ocTable"></div>
+    <div id="ocStrikeSummary"></div>
+    <div id="ocLevels"></div>
+    <div id="ocSummary"></div>
   </div>
 </main>
 <footer>Free data sources: Finnhub · Twelve Data · Alpha Vantage · NSE · Yahoo Finance · TradingView · Angel One. For reference only — not investment advice.</footer>
@@ -1021,6 +1069,140 @@ document.querySelectorAll(".tf-btn").forEach(btn => {
   });
 });
 
+/* --- Option Chain tab (positioning read only — no trade signals) --- */
+let ocLoaded = false;
+let _ocPollTimer = null;
+
+function startOcPolling() { stopOcPolling(); _ocPollTimer = setInterval(loadOptionChain, 45000); }
+function stopOcPolling() { if (_ocPollTimer) clearInterval(_ocPollTimer); _ocPollTimer = null; }
+
+function ocHeaderHTML(d) {
+  if (d.error || d.spot == null) {
+    return `<div class="errbanner">Could not load option chain — ${esc(d.error || "no data")}</div>`;
+  }
+  return `
+  <div class="oc-header">
+    <div class="oc-hitem"><span class="tg-label">NIFTY</span><span class="tg-val">${fmtPrice(d.spot)}</span></div>
+    <div class="oc-hitem"><span class="tg-label">EXPIRY</span><span class="tg-val">${esc(d.expiry)}</span></div>
+    <div class="oc-hitem"><span class="tg-label">DTE</span><span class="tg-val">${d.dte != null ? d.dte + (d.dte === 1 ? " day" : " days") : "—"}</span></div>
+    <div class="oc-hitem"><span class="tg-label">ATM</span><span class="tg-val">${fmtPrice(d.atm)}</span></div>
+    <div class="oc-hitem"><span class="tg-label">PCR</span><span class="tg-val">${d.pcr != null ? d.pcr : "—"}</span></div>
+    <div class="oc-hitem"><span class="tg-label">MAX PAIN</span><span class="tg-val">${d.max_pain != null ? fmtPrice(d.max_pain) : "—"}</span></div>
+  </div>`;
+}
+
+function ocCell(side) {
+  if (!side) return `<td colspan="5" class="oc-empty">—</td>`;
+  const chgCls = side.oi_chg > 0 ? "up" : side.oi_chg < 0 ? "down" : "flat";
+  return `
+    <td class="oc-num">${side.oi != null ? side.oi.toLocaleString("en-IN") : "—"}</td>
+    <td class="oc-num ${chgCls}">${side.oi_chg != null ? (side.oi_chg > 0 ? "+" : "") + side.oi_chg.toLocaleString("en-IN") : "—"}</td>
+    <td class="oc-num">${side.volume != null ? side.volume.toLocaleString("en-IN") : "—"}</td>
+    <td class="oc-num">${side.iv != null ? side.iv.toFixed(1) + "%" : "—"}</td>
+    <td class="oc-num oc-ltp">${side.ltp != null ? fmtPrice(side.ltp) : "—"}</td>`;
+}
+
+function ocTableHTML(d) {
+  if (!d.rows || !d.rows.length) return "";
+  const rows = d.rows.map(r => {
+    const isAtm = r.strike === d.atm;
+    return `<tr class="${isAtm ? "oc-atm" : ""}">
+      ${ocCell(r.ce)}
+      <td class="oc-strike">${fmtPrice(r.strike)}</td>
+      ${ocCell(r.pe)}
+    </tr>`;
+  }).join("");
+  return `
+  <div class="oc-table-wrap">
+  <table class="oc-table">
+    <thead>
+      <tr>
+        <th colspan="5" class="oc-side-label ce">CALLS</th>
+        <th></th>
+        <th colspan="5" class="oc-side-label pe">PUTS</th>
+      </tr>
+      <tr>
+        <th>OI</th><th>OI Chg</th><th>Vol</th><th>IV</th><th>LTP</th>
+        <th>Strike</th>
+        <th>LTP</th><th>IV</th><th>Vol</th><th>OI Chg</th><th>OI</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  </div>`;
+}
+
+function ocStrikeSummaryHTML(d) {
+  const s = d.strikes_info || {};
+  const call = s.call || {}, put = s.put || {};
+  const line = (label, v) => `<div class="oc-sum-line"><span class="tg-label">${label}</span><span class="tg-val">${v != null ? fmtPrice(v) : "—"}</span></div>`;
+  return `
+  <div class="oc-strike-summary">
+    <div class="oc-side-block ce">
+      <div class="oc-side-title">CALL SIDE</div>
+      ${line("Highest OI", call.highest_oi)}
+      ${line("Largest OI Add", call.largest_add)}
+      ${line("Largest Unwind", call.largest_unwind)}
+    </div>
+    <div class="oc-side-block pe">
+      <div class="oc-side-title">PUT SIDE</div>
+      ${line("Highest OI", put.highest_oi)}
+      ${line("Largest OI Add", put.largest_add)}
+      ${line("Largest Unwind", put.largest_unwind)}
+    </div>
+  </div>`;
+}
+
+function ocLevelsHTML(d) {
+  const levels = d.levels || { resistance: [], support: [] };
+  const maxOi = Math.max(1, ...[...levels.resistance, ...levels.support].map(z => z.oi));
+  const bar = (z, cls) => `<div class="oc-level-row">
+    <span class="oc-level-strike">${fmtPrice(z.strike)}</span>
+    <div class="oc-level-bar-track"><div class="oc-level-bar ${cls}" style="width:${Math.max(6, z.oi / maxOi * 100)}%"></div></div>
+    <span class="oc-level-oi">${z.oi.toLocaleString("en-IN")}</span>
+  </div>`;
+  return `
+  <div class="oc-levels">
+    <div class="oc-levels-title">OPTION CHAIN LEVELS</div>
+    <div class="oc-level-group"><span class="oc-level-label down">Resistance (Call OI)</span>${levels.resistance.map(z => bar(z, "down")).join("")}</div>
+    <div class="oc-level-group"><span class="oc-level-label up">Support (Put OI)</span>${levels.support.map(z => bar(z, "up")).join("")}</div>
+    <div class="bias-note">Positioning concentration from open interest — separate from the Trend tab's price-based support/resistance.</div>
+  </div>`;
+}
+
+function ocSummaryHTML(d) {
+  const s = d.summary || {};
+  const cls = s.pcr_read === "Bullish-leaning" ? "up" : s.pcr_read === "Bearish-leaning" ? "down" : "flat";
+  return `
+  <div class="bias ${cls}">
+    <div class="bias-head"><span class="bias-verdict">OPTION CHAIN READ: ${esc((s.pcr_read || "Unknown").toUpperCase())}</span></div>
+    <div class="trend-grid">
+      <div><span class="tg-label">PCR</span><span class="tg-val">${s.pcr != null ? s.pcr : "—"}</span></div>
+      <div><span class="tg-label">RESISTANCE</span><span class="tg-val">${(s.resistance_zone || []).map(fmtPrice).join(" · ") || "—"}</span></div>
+      <div><span class="tg-label">SUPPORT</span><span class="tg-val">${(s.support_zone || []).map(fmtPrice).join(" · ") || "—"}</span></div>
+      <div><span class="tg-label">LARGEST CALL ADD</span><span class="tg-val">${s.largest_call_add != null ? fmtPrice(s.largest_call_add) : "—"}</span></div>
+      <div><span class="tg-label">LARGEST PUT ADD</span><span class="tg-val">${s.largest_put_add != null ? fmtPrice(s.largest_put_add) : "—"}</span></div>
+    </div>
+    <div class="bias-note">⚠️ ${esc(s.note || "Option-chain data alone is not a trade signal.")}</div>
+  </div>`;
+}
+
+async function loadOptionChain() {
+  try {
+    const res = await fetch("/api/optionchain", { cache: "no-store" });
+    const d = await res.json();
+    ocLoaded = true;
+    document.getElementById("tabCountO").textContent = d.atm != null ? "•" : "–";
+    document.getElementById("ocHeader").innerHTML = ocHeaderHTML(d);
+    document.getElementById("ocTable").innerHTML = ocTableHTML(d);
+    document.getElementById("ocStrikeSummary").innerHTML = ocStrikeSummaryHTML(d);
+    document.getElementById("ocLevels").innerHTML = ocLevelsHTML(d);
+    document.getElementById("ocSummary").innerHTML = ocSummaryHTML(d);
+  } catch (e) {
+    document.getElementById("ocHeader").innerHTML = `<div class="errbanner">Could not load option chain — ${esc(e.message)}</div>`;
+  }
+}
+
 document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
@@ -1030,12 +1212,19 @@ document.querySelectorAll(".tab").forEach(t => {
     document.getElementById("panel-raw").classList.toggle("hidden", panel !== "raw");
     document.getElementById("panel-news").classList.toggle("hidden", panel !== "news");
     document.getElementById("panel-trend").classList.toggle("hidden", panel !== "trend");
+    document.getElementById("panel-optionchain").classList.toggle("hidden", panel !== "optionchain");
     if (panel === "news" && !newsLoaded) loadNews();
     if (panel === "trend") {
       if (!trendLoaded) loadTrend();
       startTrendPolling();
     } else {
       stopTrendPolling();
+    }
+    if (panel === "optionchain") {
+      if (!ocLoaded) loadOptionChain();
+      startOcPolling();
+    } else {
+      stopOcPolling();
     }
   });
 });
