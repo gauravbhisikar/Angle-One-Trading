@@ -424,6 +424,22 @@
   .bias.down { border-color: color-mix(in srgb, var(--down) 30%, var(--line)); background: var(--down-bg); }
   .bias.flat { border-color: color-mix(in srgb, var(--amber) 30%, var(--line)); background: var(--amber-bg); }
   .bias-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .nifty-now {
+    margin-left: auto; font-size: 12px; color: var(--muted); font-family: var(--mono);
+    background: var(--surface2); padding: 4px 10px; border-radius: 999px; cursor: default;
+  }
+  .nifty-now b { color: var(--accent); font-size: 13px; }
+  .chart-legend {
+    display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--line); font-size: 10.5px; color: var(--muted);
+  }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-swatch { width: 12px; height: 8px; border-radius: 2px; display: inline-block; }
+  .legend-swatch.legend-res { background: color-mix(in srgb, var(--down) 45%, transparent); }
+  .legend-swatch.legend-sup { background: color-mix(in srgb, var(--up) 45%, transparent); }
+  .legend-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  .legend-line { width: 14px; height: 0; border-top: 1.5px dashed var(--amber); display: inline-block; }
+  .legend-line.legend-line-price { border-top-style: dotted; border-top-color: var(--accent); }
   .bias-verdict { font-size: 19px; font-weight: 700; letter-spacing: .2px; }
   .bias.up   .bias-verdict { color: var(--up); }
   .bias.down .bias-verdict { color: var(--down); }
@@ -541,8 +557,8 @@
   <div id="panel-trend" class="hidden">
     <div id="trendStatusPanel"></div>
     <div class="chart-toolbar">
-      <button class="tf-btn active" data-tf="15m">15M</button>
-      <button class="tf-btn" data-tf="1h">1H</button>
+      <button class="tf-btn active" data-tf="15m" title="15-minute candles — the primary, faster-reacting structure read (what the TREND badge above shows)">15M</button>
+      <button class="tf-btn" data-tf="1h" title="1-hour candles — same rules, coarser timeframe, for higher-timeframe context (the 1H TREND field above)">1H</button>
     </div>
     <canvas id="trendChart"></canvas>
   </div>
@@ -1006,19 +1022,27 @@ function trendStatusHTML(d) {
   <div class="bias trend-status ${cls}">
     <div class="bias-head">
       <span class="bias-verdict">${emoji} TREND: ${esc(label)}</span>
+      ${d.current_price != null ? `<span class="nifty-now" title="Live NIFTY 50 spot price, from the same Angel One feed used to build the forming candle">NIFTY NOW <b>${fmtPrice(d.current_price)}</b></span>` : ""}
     </div>
     <div class="trend-grid">
-      <div><span class="tg-label">15M STRUCTURE</span><span class="tg-val">${(d.structure_sequence_15m || []).join(" → ") || "—"}</span></div>
-      <div><span class="tg-label">1H TREND</span><span class="tg-val">${esc((d.trend_1h || "—").toUpperCase())}</span></div>
-      <div><span class="tg-label">NEAREST SUPPORT</span><span class="tg-val up">${d.nearest_support != null ? fmtPrice(d.nearest_support) : "—"}</span></div>
-      <div><span class="tg-label">NEAREST RESISTANCE</span><span class="tg-val down">${d.nearest_resistance != null ? fmtPrice(d.nearest_resistance) : "—"}</span></div>
-      <div><span class="tg-label">INVALIDATION LEVEL</span><span class="tg-val">${d.invalidation_level != null ? fmtPrice(d.invalidation_level) : "—"}</span></div>
-      ${trendStart ? `<div><span class="tg-label">TREND STARTED</span><span class="tg-val">${fmtDate(trendStart.ts)}, ${fmtTime(trendStart.ts)}</span></div>` : ""}
+      <div title="Sequence of confirmed swing highs/lows on 15-minute candles — HH/HL = higher high/higher low (bullish), LH/LL = lower high/lower low (bearish)"><span class="tg-label">15M STRUCTURE</span><span class="tg-val">${(d.structure_sequence_15m || []).join(" → ") || "—"}</span></div>
+      <div title="Same structure logic, computed independently on 1-hour candles — the bigger-picture read"><span class="tg-label">1H TREND</span><span class="tg-val">${esc((d.trend_1h || "—").toUpperCase())}</span></div>
+      <div title="Nearest price zone below current price where buyers have repeatedly stepped in (clustered swing lows)"><span class="tg-label">NEAREST SUPPORT</span><span class="tg-val up">${d.nearest_support != null ? fmtPrice(d.nearest_support) : "—"}</span></div>
+      <div title="Nearest price zone above current price where sellers have repeatedly capped it (clustered swing highs)"><span class="tg-label">NEAREST RESISTANCE</span><span class="tg-val down">${d.nearest_resistance != null ? fmtPrice(d.nearest_resistance) : "—"}</span></div>
+      <div title="The price level that would undo the current trend read if broken — the most recent confirmed swing this trend rests on"><span class="tg-label">INVALIDATION LEVEL</span><span class="tg-val">${d.invalidation_level != null ? fmtPrice(d.invalidation_level) : "—"}</span></div>
+      ${trendStart ? `<div title="Candle where the current unbroken HH/HL or LH/LL run began — also marked on the chart below"><span class="tg-label">TREND STARTED</span><span class="tg-val">${fmtDate(trendStart.ts)}, ${fmtTime(trendStart.ts)}</span></div>` : ""}
     </div>
     <div class="trend-candle-status ${stale_date ? "date-stale" : ""}">
       ${stale_date ? "⚠️ " : ""}Last closed candle: ${fmtDate(lastClosedTs) || "—"}, ${fmtTime(lastClosedTs)}
-      ${forming ? `· Current candle: ${fmtTime(forming.open_ts)}–${fmtTime(forming.closes_at)} <span class="forming-tag">FORMING</span>` : ""}
+      ${forming ? `· Current candle: ${fmtTime(forming.open_ts)}–${fmtTime(forming.closes_at)} <span class="forming-tag" title="This candle hasn't closed yet — it's never used to confirm a swing, only shown as a live reference">FORMING</span>` : ""}
       ${stale_date ? `<span class="date-stale-note">not today's date — this may be leftover pre-market data</span>` : ""}
+    </div>
+    <div class="chart-legend">
+      <span class="legend-item"><span class="legend-swatch legend-res"></span>Resistance zone</span>
+      <span class="legend-item"><span class="legend-swatch legend-sup"></span>Support zone</span>
+      <span class="legend-item"><span class="legend-dot"></span>Confirmed swing point</span>
+      <span class="legend-item"><span class="legend-line"></span>Trend start</span>
+      <span class="legend-item"><span class="legend-line legend-line-price"></span>Current price</span>
     </div>
     <div class="bias-note">Rule-based structure analysis — no prediction, no buy/sell signal, recalculated on every closed candle.</div>
   </div>`;
@@ -1088,6 +1112,20 @@ function drawTrendChart(canvas, data, tf) {
     ctx.setLineDash([]); ctx.lineWidth = 1;
     ctx.fillStyle = markerCol; ctx.font = "9px " + col("--mono"); ctx.textAlign = "center";
     ctx.fillText("TREND START", sx, marginT + 10);
+    ctx.textAlign = "left";
+  }
+
+  if (data.current_price != null && data.current_price >= yMin && data.current_price <= yMax) {
+    const py = y(data.current_price);
+    ctx.strokeStyle = accentCol; ctx.setLineDash([2, 3]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(marginL, py); ctx.lineTo(marginL + plotW, py); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = accentCol; ctx.font = "10px " + col("--mono");
+    const label = fmtPrice(data.current_price);
+    const lw = ctx.measureText(label).width + 8;
+    ctx.fillRect(marginL + plotW - lw, py - 8, lw, 16);
+    ctx.fillStyle = "#fff"; ctx.textAlign = "center";
+    ctx.fillText(label, marginL + plotW - lw / 2, py + 3);
     ctx.textAlign = "left";
   }
 
