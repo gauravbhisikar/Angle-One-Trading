@@ -50,6 +50,7 @@ class TrendState:
         self.candles = []  # all closed candles seen so far (for lookback windows)
         self.swings = []  # confirmed swings, ascending by i
         self.structure_sequence = []  # list of "HH"/"HL"/"LH"/"LL"
+        self.structure_detail = []  # parallel list: {"label", "i", "ts"} per event, for locating trend-start on a chart
         self.zones = []  # all zones ever formed
         self.trend = "sideways"
         self.possible_reversal = None
@@ -83,8 +84,13 @@ def _last_swing_of_type(state, kind):
     return None
 
 
-def _classify_structure(state, new_swing):
-    prior = _last_swing_of_type(state, new_swing["type"])
+def _classify_structure(state, new_swing, prior):
+    """prior must be the last CONFIRMED swing of this type from BEFORE
+    new_swing was added to state.swings — looking it up here instead would
+    find new_swing itself (already appended by the caller) and compare it
+    to itself, which is never `>`, silently forcing every swing to LH/LL
+    and never HH/HL. Caller already computes this correctly for the
+    min-move check; reuse that instead of a second, buggy lookup."""
     if prior is None:
         return None
     if new_swing["type"] == "high":
@@ -92,6 +98,7 @@ def _classify_structure(state, new_swing):
     else:
         label = "HL" if new_swing["price"] > prior["price"] else "LL"
     state.structure_sequence.append(label)
+    state.structure_detail.append({"label": label, "i": new_swing["i"], "ts": new_swing["ts"]})
     return label
 
 
@@ -239,6 +246,25 @@ def _invalidation_level(state):
     return None
 
 
+def _trend_start(state):
+    """Where the CURRENT trend run began: walks backward through
+    structure_detail while events keep matching the current trend's
+    allowed pair (HH/HL for bullish, LH/LL for bearish), stopping at the
+    first event that breaks the run. Returns the candle index/ts of the
+    earliest swing in that unbroken run, or None if trend is sideways or
+    there's no structure yet — this is what draws the "trend start"
+    marker on the chart."""
+    if state.trend not in ("bullish", "bearish") or not state.structure_detail:
+        return None
+    allowed = ("HH", "HL") if state.trend == "bullish" else ("LH", "LL")
+    start = None
+    for ev in reversed(state.structure_detail):
+        if ev["label"] not in allowed:
+            break
+        start = ev
+    return {"i": start["i"], "ts": start["ts"]} if start else None
+
+
 def process_candle(state, candle):
     """Feed ONE closed candle. Never looks at candles after `candle` in the
     caller's sequence — this is the no-lookahead guarantee. Returns a small
@@ -269,7 +295,7 @@ def process_candle(state, candle):
                 }
                 state.swings.append(swing)
                 result["new_swing"] = swing
-                label = _classify_structure(state, swing)
+                label = _classify_structure(state, swing, prior)
                 result["structure_event"] = label
                 zone = _cluster_into_zones(state, swing, config["sr_cluster_pct"])
                 _update_trend(state)
@@ -305,6 +331,7 @@ def snapshot(state):
 
     return {
         "trend": state.trend,
+        "trend_start": _trend_start(state),
         "reversal": state.possible_reversal,
         "structure_sequence": list(state.structure_sequence[-12:]),
         "swings": [dict(s) for s in state.swings[-30:]],

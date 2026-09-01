@@ -1439,6 +1439,7 @@ def build_trend():
         "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
         "data_status": data_status,
         "trend_15m": snap15["trend"], "trend_1h": snap60["trend"],
+        "trend_start_15m": snap15["trend_start"], "trend_start_1h": snap60["trend_start"],
         "reversal": snap15["reversal"],
         "structure_sequence_15m": snap15["structure_sequence"],
         "structure_sequence_1h": snap60["structure_sequence"],
@@ -1728,7 +1729,8 @@ class Handler(BaseHTTPRequestHandler):
                         CACHE["trend"] = snap
                 except Exception as exc:
                     snap = {"error": str(exc), "data_status": "stale",
-                            "trend_15m": None, "trend_1h": None, "reversal": None,
+                            "trend_15m": None, "trend_1h": None,
+                            "trend_start_15m": None, "trend_start_1h": None, "reversal": None,
                             "structure_sequence_15m": [], "structure_sequence_1h": [],
                             "swings_15m": [], "swings_1h": [], "zones_15m": [], "zones_1h": [],
                             "breakouts_15m": [], "breakdowns_15m": [], "retests_15m": [],
