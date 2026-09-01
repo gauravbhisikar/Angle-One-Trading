@@ -1364,7 +1364,13 @@ document.querySelectorAll(".tab").forEach(t => {
   });
 });
 
-document.getElementById("refreshBtn").addEventListener("click", load);
+document.getElementById("refreshBtn").addEventListener("click", () => {
+  load();
+  const activePanel = document.querySelector(".tab.active");
+  const panel = activePanel ? activePanel.dataset.panel : null;
+  if (panel === "trend") loadTrend();
+  if (panel === "optionchain") loadOptionChain();
+});
 setLive(live);
 load();
 </script>
