@@ -23,6 +23,11 @@
     --accent-bg: rgba(63,92,255,.09);
     --mono: "Cascadia Mono", "JetBrains Mono", Consolas, "Courier New", monospace;
     --shadow: 0 1px 2px rgba(16,24,40,.04);
+    /* Material-style elevation: layered ambient + directional shadow per tier */
+    --elev-1: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.05);
+    --elev-2: 0 2px 6px rgba(16,24,40,.08), 0 1px 2px rgba(16,24,40,.06);
+    --elev-hover: 0 6px 16px rgba(16,24,40,.10), 0 2px 4px rgba(16,24,40,.06);
+    --radius: 14px;
   }
   html[data-theme="dark"] {
     --bg: #0d131f;
@@ -41,6 +46,9 @@
     --amber-bg: rgba(224,178,101,.12);
     --accent-bg: rgba(123,149,255,.12);
     --shadow: 0 1px 2px rgba(0,0,0,.3);
+    --elev-1: 0 1px 2px rgba(0,0,0,.35), 0 1px 3px rgba(0,0,0,.2);
+    --elev-2: 0 2px 6px rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.3);
+    --elev-hover: 0 8px 20px rgba(0,0,0,.45), 0 2px 5px rgba(0,0,0,.3);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -194,13 +202,13 @@
   .card {
     background: var(--surface);
     border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 12px 14px;
+    border-radius: var(--radius);
+    padding: 14px 16px;
     display: flex; flex-direction: column; gap: 6px;
-    transition: border-color .15s;
-    box-shadow: var(--shadow);
+    transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+    box-shadow: var(--elev-1);
   }
-  .card:hover { border-color: var(--faint); }
+  .card:hover { border-color: var(--faint); box-shadow: var(--elev-hover); transform: translateY(-1px); }
   .ctop { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .ctitle { font-size: 10px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .7px; }
   .csrc {
@@ -322,11 +330,13 @@
     background: var(--amber-bg); padding: 2px 6px; border-radius: 999px; margin-left: 4px;
   }
   .trend-stale .bias-verdict { color: var(--down); }
+  .trend-candle-status.date-stale { color: var(--down); font-weight: 600; }
+  .date-stale-note { display: block; font-family: var(--mono); font-size: 10px; color: var(--down); margin-top: 3px; }
 
   .oc-header {
-    display: flex; flex-wrap: wrap; gap: 22px; padding: 16px 20px;
-    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
-    margin-bottom: 16px; box-shadow: var(--shadow);
+    display: flex; flex-wrap: wrap; gap: 22px; padding: 18px 22px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    margin-bottom: 16px; box-shadow: var(--elev-1);
   }
   .oc-hitem { display: flex; flex-direction: column; gap: 4px; }
   .oc-table-wrap { overflow-x: auto; margin-bottom: 16px; }
@@ -344,13 +354,13 @@
   .oc-num.up { color: var(--up); } .oc-num.down { color: var(--down); } .oc-num.flat { color: var(--muted); }
 
   .oc-strike-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 16px; }
-  .oc-side-block { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .oc-side-block { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--elev-1); }
   .oc-side-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; margin-bottom: 10px; }
   .oc-side-block.ce .oc-side-title { color: var(--up); }
   .oc-side-block.pe .oc-side-title { color: var(--down); }
   .oc-sum-line { display: flex; justify-content: space-between; padding: 4px 0; }
 
-  .oc-levels { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+  .oc-levels { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px; box-shadow: var(--elev-1); }
   .oc-levels-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--faint); font-weight: 700; margin-bottom: 10px; }
   .oc-level-group { margin-bottom: 10px; }
   .oc-level-label { display: block; font-size: 10.5px; font-weight: 600; margin-bottom: 6px; }
@@ -380,9 +390,11 @@
   .oc-shortlist-col-title { font-size: 11px; font-weight: 700; letter-spacing: .5px; margin-bottom: 10px; }
   .oc-shortlist-col-title.up { color: var(--up); } .oc-shortlist-col-title.down { color: var(--down); }
   .oc-cand {
-    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
-    padding: 12px 14px; margin-bottom: 10px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 10px; box-shadow: var(--elev-1);
+    transition: box-shadow .18s ease, transform .18s ease;
   }
+  .oc-cand:hover { box-shadow: var(--elev-hover); transform: translateY(-1px); }
   .oc-cand-atm { border-color: var(--accent); background: var(--accent-bg); }
   .oc-cand-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
   .oc-cand-strike { font-family: var(--mono); font-weight: 700; font-size: 13px; }
@@ -404,8 +416,9 @@
   .news-headline:hover { text-decoration: underline; }
   .news-foot { margin-top: auto; padding-top: 6px; }
   .bias {
-    border-radius: 14px; padding: 16px 18px; margin-bottom: 16px;
+    border-radius: var(--radius); padding: 18px 20px; margin-bottom: 16px;
     border: 1px solid var(--line); background: var(--surface);
+    box-shadow: var(--elev-1);
   }
   .bias.up   { border-color: color-mix(in srgb, var(--up) 30%, var(--line));   background: var(--up-bg); }
   .bias.down { border-color: color-mix(in srgb, var(--down) 30%, var(--line)); background: var(--down-bg); }
@@ -980,6 +993,15 @@ function trendStatusHTML(d) {
   const lastCandles = d[`candles_${currentTrendTf}`] || [];
   const lastClosed = lastCandles.length ? lastCandles[lastCandles.length - 1] : null;
   const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—";
+  const fmtDate = ts => ts ? new Date(ts * 1000).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : null;
+  const isToday = ts => {
+    if (!ts) return true;
+    const d1 = new Date(ts * 1000), d2 = new Date();
+    return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+  };
+  const lastClosedTs = lastClosed && lastClosed.ts;
+  const stale_date = !isToday(lastClosedTs);
+  const trendStart = d[`trend_start_${currentTrendTf}`];
   return `
   <div class="bias trend-status ${cls}">
     <div class="bias-head">
@@ -991,10 +1013,12 @@ function trendStatusHTML(d) {
       <div><span class="tg-label">NEAREST SUPPORT</span><span class="tg-val up">${d.nearest_support != null ? fmtPrice(d.nearest_support) : "—"}</span></div>
       <div><span class="tg-label">NEAREST RESISTANCE</span><span class="tg-val down">${d.nearest_resistance != null ? fmtPrice(d.nearest_resistance) : "—"}</span></div>
       <div><span class="tg-label">INVALIDATION LEVEL</span><span class="tg-val">${d.invalidation_level != null ? fmtPrice(d.invalidation_level) : "—"}</span></div>
+      ${trendStart ? `<div><span class="tg-label">TREND STARTED</span><span class="tg-val">${fmtDate(trendStart.ts)}, ${fmtTime(trendStart.ts)}</span></div>` : ""}
     </div>
-    <div class="trend-candle-status">
-      Last closed candle: ${fmtTime(lastClosed && lastClosed.ts)}
+    <div class="trend-candle-status ${stale_date ? "date-stale" : ""}">
+      ${stale_date ? "⚠️ " : ""}Last closed candle: ${fmtDate(lastClosedTs) || "—"}, ${fmtTime(lastClosedTs)}
       ${forming ? `· Current candle: ${fmtTime(forming.open_ts)}–${fmtTime(forming.closes_at)} <span class="forming-tag">FORMING</span>` : ""}
+      ${stale_date ? `<span class="date-stale-note">not today's date — this may be leftover pre-market data</span>` : ""}
     </div>
     <div class="bias-note">Rule-based structure analysis — no prediction, no buy/sell signal, recalculated on every closed candle.</div>
   </div>`;
@@ -1053,6 +1077,19 @@ function drawTrendChart(canvas, data, tf) {
     ctx.fillStyle = accentCol;
     ctx.beginPath(); ctx.arc(cx, cy, 2.5, 0, Math.PI * 2); ctx.fill();
   });
+
+  const trendStart = data[`trend_start_${tf}`];
+  if (trendStart && trendStart.i >= firstShownI) {
+    const trend = data[`trend_${tf}`];
+    const markerCol = trend === "bullish" ? upCol : trend === "bearish" ? downCol : amberCol;
+    const sx = x(trendStart.i - firstShownI);
+    ctx.strokeStyle = markerCol; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(sx, marginT); ctx.lineTo(sx, marginT + plotH); ctx.stroke();
+    ctx.setLineDash([]); ctx.lineWidth = 1;
+    ctx.fillStyle = markerCol; ctx.font = "9px " + col("--mono"); ctx.textAlign = "center";
+    ctx.fillText("TREND START", sx, marginT + 10);
+    ctx.textAlign = "left";
+  }
 
   // y-axis price labels
   ctx.fillStyle = textCol; ctx.font = "10px " + col("--mono"); ctx.textAlign = "right";
