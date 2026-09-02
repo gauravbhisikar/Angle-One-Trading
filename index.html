@@ -1090,14 +1090,13 @@ function trendStatusHTML(d) {
   if (!d || d.error) {
     return `<div class="errbanner">Could not load trend — ${esc((d && d.error) || "no data")}</div>`;
   }
-  if (d.data_status === "stale") {
-    return `
+  const staleBanner = d.data_status === "stale" ? `
     <div class="bias down trend-stale">
       <div class="bias-head"><span class="bias-verdict">⚠️ DATA STALE — trend analysis paused</span></div>
-      <div class="bias-note">Angel One candle data hasn't updated recently — showing the last known state below,
-      not advancing further until fresh data arrives. Never trust a stale read as live.</div>
-    </div>`;
-  }
+      <div class="bias-note">Angel One candle data hasn't updated recently (commonly just means NSE is
+      closed right now) — showing the last known state below, not advancing further until fresh data
+      arrives. Never trust a stale read as live.</div>
+    </div>` : "";
   const tf = currentTrendTf;
   const tfLabel = tf.toUpperCase();
   const trend = d[`trend_${tf}`] || "sideways";
@@ -1210,6 +1209,7 @@ function trendStatusHTML(d) {
   const fakeIsRecent = recentFake && lastCandles.length && recentFake.i >= lastCandles.length - 6;
 
   return `
+  ${staleBanner}
   <div class="bias trend-status ${cls}">
     <div class="bias-head">
       <span class="bias-verdict">${emoji} TREND (${tfLabel}): ${esc(label)}</span>
