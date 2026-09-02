@@ -317,10 +317,20 @@ def process_candle(state, candle):
 def snapshot(state):
     """Pure read of accumulated state -> JSON-serializable dict. Never mutates."""
     now_i = len(state.candles) - 1
-    ranked_zones = sorted(
-        (z for z in state.zones if len(z["touches"]) >= state.config["sr_min_touches"]),
-        key=lambda z: _zone_strength(z, now_i, state.config), reverse=True,
-    )[: state.config["sr_max_zones_shown"]]
+    qualifying = [z for z in state.zones if len(z["touches"]) >= state.config["sr_min_touches"]]
+    # Rank PER KIND, not flat across both — a flat top-N can let one side
+    # (e.g. long-established, high-touch-count resistance zones) crowd out
+    # every support zone, leaving nearest_support blank even when real,
+    # qualifying support zones exist (confirmed bug: with sr_max_zones_shown=4
+    # and resistance zones at 18/11/11/10 touches, no newer/lower-touch
+    # support zone ever made a flat top-4 cut). Half the budget per side
+    # guarantees both get a chance to show when they exist.
+    per_side = max(1, state.config["sr_max_zones_shown"] // 2)
+    ranked_zones = []
+    for kind in ("resistance", "support"):
+        side = sorted((z for z in qualifying if z["kind"] == kind),
+                       key=lambda z: _zone_strength(z, now_i, state.config), reverse=True)
+        ranked_zones.extend(side[:per_side])
     last_price = state.candles[-1]["close"] if state.candles else None
     nearest_resistance = _nearest_zone(ranked_zones, last_price, "resistance") if last_price is not None else None
     nearest_support = _nearest_zone(ranked_zones, last_price, "support") if last_price is not None else None

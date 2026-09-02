@@ -468,6 +468,7 @@
   .bias-note { font-size: 11px; color: var(--muted); margin-top: 10px; font-style: italic; }
   .ai-trend { border-left: 3px solid var(--accent); }
   .ai-trend .ai-summary { font-size: 12.5px; color: var(--text); font-style: normal; line-height: 1.5; }
+  .ai-generated-at { font-size: 10.5px; color: var(--faint); font-family: var(--mono); margin-top: 6px; }
   .ai-block { margin-top: 14px; }
   .ai-block-label {
     font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px;
@@ -790,7 +791,12 @@ function renderBanner(mkt) {
 }
 
 function renderSummary(checks) {
-  const signals = checks;
+  // chk_nifty (support/resistance) is never a directional signal — it's
+  // shown as its own wide ladder card, not one of the grid cards a user
+  // would count by eye, so it must not silently inflate the tally either
+  // (was previously excluded from "reasons" below but NOT from this
+  // count, causing e.g. "1/2/5 = 8" to not match the 7 visible cards).
+  const signals = checks.filter(c => c.id !== "chk_nifty");
   const good = signals.filter(c => c.verdict_class === "up").length;
   const bad = signals.filter(c => c.verdict_class === "down").length;
   const mid = signals.filter(c => c.verdict_class === "flat").length;
@@ -875,7 +881,7 @@ async function load() {
     document.getElementById("tabCountA").textContent = checks.length;
     renderSummary(checks);
 
-    document.getElementById("aiTrend").innerHTML = newsData ? aiTrendHTML(newsData.trend) : "";
+    document.getElementById("aiTrend").innerHTML = newsData ? aiTrendHTML(newsData.trend, newsData.generated_at) : "";
 
     if (newsData) {
       newsLoaded = true;
@@ -926,7 +932,7 @@ function newsSentimentHTML(s, method, generatedAt, totalFetched) {
   </div>`;
 }
 
-function aiTrendHTML(trend) {
+function aiTrendHTML(trend, generatedAt) {
   if (!trend) return "";
   const cls = trend.expected_trend === "bullish" ? "up"
     : trend.expected_trend === "bearish" ? "down" : "flat";
@@ -938,6 +944,7 @@ function aiTrendHTML(trend) {
       <span class="bias-verdict">🤖 AI HYPOTHESIS: ${esc((trend.expected_trend || "").toUpperCase())}</span>
       <span class="bias-counts">confidence: ${esc(trend.confidence || "—")}</span>
     </div>
+    <div class="ai-generated-at" title="This hypothesis regenerates every ~5 minutes — the numbers it references (e.g. GIFT NIFTY) were live AT THAT TIME, and may already differ from the live cards above, which refresh every 10s">Based on data as of ${esc(generatedAt || "—")} IST — may lag the live cards above by up to ~5 min</div>
 
     ${why ? `<div class="bias-why">Why</div><div class="bias-reasons">${why}</div>` : ""}
 

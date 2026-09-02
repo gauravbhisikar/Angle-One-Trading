@@ -1016,9 +1016,9 @@ def build_market():
              "updated": ist_now().strftime("%H:%M:%S")})
 
     # --- Global indices (Finnhub) ---
-    for cid, title, sym in (("sp500", "S&P 500", "SPY"),
-                            ("nasdaq", "Nasdaq", "QQQ"),
-                            ("dow", "Dow Jones", "DIA")):
+    for cid, title, sym in (("sp500", "S&P 500 (SPY proxy)", "SPY"),
+                            ("nasdaq", "Nasdaq (QQQ proxy)", "QQQ"),
+                            ("dow", "Dow Jones (DIA proxy)", "DIA")):
         try:
             q = finnhub_quote(sym)
             quote_card(cid, title, "Finnhub", q["price"], q["chg"],
