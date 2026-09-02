@@ -508,13 +508,23 @@ def normalize_candle(raw):
 
 
 def _parse_ts(date_str):
+    """Angel One's historical-candle date field is an offset-aware ISO
+    string in IST, e.g. "2026-09-02T15:15:00+05:30" — NOT UTC. Dropping the
+    "+05:30" and treating the bare wall-clock time as UTC (the previous
+    implementation) silently added a spurious +5:30 shift on every candle,
+    turning a real 15:15 IST close into an epoch that displays as 20:45 —
+    confirmed live (dashboard showed "Last closed candle: 08:45 pm" while
+    NSE was closed and current time was ~18:06 IST). fromisoformat parses
+    the offset correctly so .timestamp() gives the true UTC epoch regardless
+    of what offset the source string carried."""
     import datetime
-    s = date_str[:19]
     try:
-        dt = datetime.datetime.strptime(s, "%Y-%m-%dT%H:%M:%S")
+        dt = datetime.datetime.fromisoformat(date_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
     except ValueError:
-        dt = datetime.datetime.strptime(s[:10], "%Y-%m-%d")
-    return dt.replace(tzinfo=datetime.timezone.utc).timestamp()
+        dt = datetime.datetime.strptime(date_str[:10], "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    return dt.timestamp()
 
 
 def normalize_candles(raw_rows, timeframe):

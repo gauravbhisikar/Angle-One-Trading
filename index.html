@@ -1056,12 +1056,13 @@ function trendStatusHTML(d) {
   const forming = d[`forming_${currentTrendTf}`];
   const lastCandles = d[`candles_${currentTrendTf}`] || [];
   const lastClosed = lastCandles.length ? lastCandles[lastCandles.length - 1] : null;
-  const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—";
-  const fmtDate = ts => ts ? new Date(ts * 1000).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : null;
+  const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }) : "—";
+  const fmtDate = ts => ts ? new Date(ts * 1000).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "Asia/Kolkata" }) : null;
   const isToday = ts => {
     if (!ts) return true;
-    const d1 = new Date(ts * 1000), d2 = new Date();
-    return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+    const istDate = (t) => new Date(t * 1000).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // en-CA -> YYYY-MM-DD
+    const serverToday = d.generated_at ? d.generated_at.slice(0, 10) : istDate(Date.now() / 1000);
+    return istDate(ts) === serverToday;
   };
   const lastClosedTs = lastClosed && lastClosed.ts;
   const stale_date = !isToday(lastClosedTs);
