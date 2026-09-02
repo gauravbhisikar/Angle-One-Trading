@@ -394,3 +394,69 @@ def advance_live_trend(state, new_candles):
     for candle in new_candles:
         if state.last_processed_ts is None or candle["ts"] > state.last_processed_ts:
             process_candle(state, candle)
+
+
+def multi_timeframe_read(trend_1h, trend_15m, trend_5m):
+    """Deterministic (no AI) read across all three timeframes, each
+    answering a different question — never treats one timeframe as
+    "always right":
+      1H  = overall market direction (the environment)
+      15M = tradable trend/setup (the PRIMARY timeframe for direction)
+      5M  = entry timing only — never overrides a 15M trend just because
+            it flickers the other way; that's read as a pullback/bounce
+            to wait out, not a reversal.
+    Returns {"action", "verdict", "detail"} — "verdict"/"detail" are
+    plain sentences, "action" is a stable machine-readable tag for the
+    UI to color/style consistently. Never a buy/sell instruction — always
+    frames CE/PE mentions as "setup", "wait", or "wait for X before Y".
+    """
+    # 5M is pure entry timing — if it has no direction yet, there is
+    # nothing to time an entry off regardless of the bigger picture.
+    if trend_5m == "sideways":
+        return {"action": "no_entry", "verdict": "No clear entry",
+                "detail": "5M (entry timing) is sideways — nothing to time an entry off right now, "
+                          "regardless of the 15M/1H read."}
+
+    # 15M is the primary trade-direction timeframe. If IT has no
+    # direction, there's no tradable setup — a directional 5M or 1H
+    # alone doesn't create one.
+    if trend_15m == "sideways":
+        return {"action": "wait_no_setup", "verdict": "Wait — no 15M setup",
+                "detail": "15M (trading direction/setup) is sideways — no tradable setup yet, "
+                          "even though 5M/1H may show a direction."}
+
+    side = "CE" if trend_15m == "bullish" else "PE"
+
+    if trend_5m != trend_15m:
+        # 15M sets the direction; 5M disagreeing is read as a counter-move
+        # to wait out, never as "the trend reversed."
+        return {"action": "wait_counter_move",
+                "verdict": f"Wait — 5M counter-move against 15M {trend_15m}",
+                "detail": f"15M is {trend_15m} (the setup), but 5M is currently {trend_5m} — read this "
+                          f"as a short-term pullback/bounce inside the 15M trend, not a reversal. "
+                          f"Wait for 5M to resume {trend_15m} before considering {side}."}
+
+    # 15M and 5M agree on direction — now factor in 1H as context.
+    if trend_1h == trend_15m:
+        return {"action": "ce_setup" if side == "CE" else "pe_setup",
+                "verdict": f"Best {side} setup — all three timeframes aligned",
+                "detail": f"1H, 15M, and 5M are all {trend_15m} — the strongest alignment this read "
+                          f"can show. Still your call to size/time the actual entry."}
+    if trend_1h == "sideways":
+        return {"action": "partial_ce" if side == "CE" else "partial_pe",
+                "verdict": f"{side} setup forming — no 1H confirmation yet",
+                "detail": f"15M and 5M both {trend_15m}, but 1H (overall market direction) is still "
+                          f"sideways — the bigger picture hasn't confirmed this yet."}
+    # 1H openly disagrees with 15M+5M (the only remaining case here).
+    # "Pullback" describes a dip WITHIN a bullish 1H trend; "bounce" a rally
+    # WITHIN a bearish 1H trend — keyed off trend_1h, not off which side
+    # 15M/5M happen to point (a 15M-bearish move during a 1H uptrend is a
+    # pullback regardless of the fact that it's currently pointing toward PE).
+    move_name = "pullback" if trend_1h == "bullish" else "bounce"
+    tag = "wait_pullback" if move_name == "pullback" else "wait_bounce"
+    return {"action": tag,
+            "verdict": f"Caution — 1H {trend_1h} conflicts with 15M/5M {trend_15m}",
+            "detail": f"15M and 5M both point {trend_15m}, but 1H (the bigger environment) is "
+                      f"{trend_1h} — this reads as a likely {move_name} inside a {trend_1h} 1H trend, "
+                      f"not a confirmed {trend_15m} move. "
+                      f"Don't jump straight to {side} without waiting for 1H to align too."}

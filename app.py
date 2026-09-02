@@ -1480,6 +1480,7 @@ def build_trend():
     out["nearest_support"] = out["nearest_support_15m"]
     out["nearest_resistance"] = out["nearest_resistance_15m"]
     out["invalidation_level"] = out["invalidation_level_15m"]
+    out["mtf_read"] = trend_engine.multi_timeframe_read(out["trend_1h"], out["trend_15m"], out["trend_5m"])
     return out
 
 
@@ -1757,7 +1758,7 @@ class Handler(BaseHTTPRequestHandler):
                         CACHE["trend"] = snap
                 except Exception as exc:
                     snap = {"error": str(exc), "data_status": "stale", "current_price": None,
-                            "reversal": None, "config": {},
+                            "reversal": None, "config": {}, "mtf_read": None,
                             "nearest_support": None, "nearest_resistance": None, "invalidation_level": None,
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
                     for tf in TREND_TIMEFRAMES:

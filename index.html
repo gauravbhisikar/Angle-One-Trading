@@ -429,18 +429,35 @@
     background: var(--surface2); padding: 4px 10px; border-radius: 999px; cursor: default;
   }
   .nifty-now b { color: var(--accent); font-size: 13px; }
-  .mtf-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
-  .mtf-pill {
-    font-size: 11px; font-weight: 600; font-family: var(--mono); padding: 5px 11px;
-    border-radius: 999px; border: 1px solid var(--line); background: var(--surface2);
+  .mtf-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 12px; }
+  .mtf-card {
+    padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface2);
     cursor: pointer; transition: box-shadow .15s ease, transform .15s ease;
   }
-  .mtf-pill:hover { box-shadow: var(--elev-1); transform: translateY(-1px); }
-  .mtf-pill.up { color: var(--up); } .mtf-pill.down { color: var(--down); } .mtf-pill.flat { color: var(--amber); }
-  .mtf-pill.mtf-active {
+  .mtf-card:hover { box-shadow: var(--elev-1); transform: translateY(-1px); }
+  .mtf-card-tf { font-size: 11px; font-weight: 700; font-family: var(--mono); color: var(--muted); }
+  .mtf-card-role { font-size: 9.5px; color: var(--faint); margin: 2px 0 5px; line-height: 1.3; }
+  .mtf-card-val { font-size: 13px; font-weight: 700; }
+  .mtf-card.up .mtf-card-val { color: var(--up); }
+  .mtf-card.down .mtf-card-val { color: var(--down); }
+  .mtf-card.flat .mtf-card-val { color: var(--amber); }
+  .mtf-card.mtf-active {
     border-color: var(--accent); background: var(--accent-bg);
     box-shadow: 0 0 0 1px var(--accent) inset;
   }
+  .mtf-verdict {
+    margin-top: 12px; padding: 12px 14px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--surface2);
+  }
+  .mtf-verdict-label {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--faint);
+    font-weight: 700; display: block; margin-bottom: 4px;
+  }
+  .mtf-verdict-text { font-size: 13.5px; font-weight: 700; }
+  .mtf-verdict.up .mtf-verdict-text { color: var(--up); }
+  .mtf-verdict.down .mtf-verdict-text { color: var(--down); }
+  .mtf-verdict.flat .mtf-verdict-text { color: var(--amber); }
+  .mtf-verdict-detail { font-size: 11.5px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
   .chart-legend {
     display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; padding-top: 10px;
     border-top: 1px solid var(--line); font-size: 10.5px; color: var(--muted);
@@ -1041,21 +1058,38 @@ function trendStatusHTML(d) {
   const lastClosedTs = lastClosed && lastClosed.ts;
   const stale_date = !isToday(lastClosedTs);
   const trendStart = d[`trend_start_${currentTrendTf}`];
+  const TF_ROLE = {
+    "1h": "Overall market direction",
+    "15m": "Trading direction / setup (primary)",
+    "5m": "Entry timing only",
+  };
   const tfPill = (t) => {
     const tt = d[`trend_${t}`] || "sideways";
     const tcls = tt === "bullish" ? "up" : tt === "bearish" ? "down" : "flat";
     const temoji = tt === "bullish" ? "🟢" : tt === "bearish" ? "🔴" : "🟡";
-    return `<span class="mtf-pill ${tcls} ${t === tf ? "mtf-active" : ""}" data-tf="${t}" title="Click to switch the chart/details below to ${t.toUpperCase()}">${t.toUpperCase()} ${temoji} ${esc(tt.toUpperCase())}</span>`;
+    return `<div class="mtf-card ${tcls} ${t === tf ? "mtf-active" : ""}" data-tf="${t}" title="Click to switch the chart/details below to ${t.toUpperCase()}">
+      <div class="mtf-card-tf">${t.toUpperCase()}</div>
+      <div class="mtf-card-role">${TF_ROLE[t]}</div>
+      <div class="mtf-card-val">${temoji} ${esc(tt.toUpperCase())}</div>
+    </div>`;
   };
+  const mtf = d.mtf_read;
+  const mtfCls = mtf && mtf.action ? (mtf.action.includes("ce") ? "up" : mtf.action.includes("pe") ? "down" : "flat") : "flat";
   return `
   <div class="bias trend-status ${cls}">
     <div class="bias-head">
       <span class="bias-verdict">${emoji} TREND (${tfLabel}): ${esc(label)}</span>
       ${d.current_price != null ? `<span class="nifty-now" title="Live NIFTY 50 spot price, from the same Angel One feed used to build the forming candle">NIFTY NOW <b>${fmtPrice(d.current_price)}</b></span>` : ""}
     </div>
-    <div class="mtf-row" title="All three timeframes at a glance — click one to switch the chart below. Classic multi-timeframe read: 1H = bias, 15M = structure, 5M = entry timing.">
-      ${tfPill("5m")}${tfPill("15m")}${tfPill("1h")}
+    <div class="mtf-row">
+      ${tfPill("1h")}${tfPill("15m")}${tfPill("5m")}
     </div>
+    ${mtf ? `
+    <div class="mtf-verdict ${mtfCls}">
+      <span class="mtf-verdict-label">MULTI-TIMEFRAME READ</span>
+      <span class="mtf-verdict-text">${esc(mtf.verdict)}</span>
+      <div class="mtf-verdict-detail">${esc(mtf.detail)}</div>
+    </div>` : ""}
     <div class="trend-grid">
       <div title="Sequence of confirmed swing highs/lows on ${tfLabel} candles — HH/HL = higher high/higher low (bullish), LH/LL = lower high/lower low (bearish)"><span class="tg-label">${tfLabel} STRUCTURE</span><span class="tg-val">${(d[`structure_sequence_${tf}`] || []).join(" → ") || "—"}</span></div>
       <div title="Nearest price zone below current price where buyers have repeatedly stepped in (clustered swing lows), on ${tfLabel}"><span class="tg-label">NEAREST SUPPORT</span><span class="tg-val up">${d[`nearest_support_${tf}`] != null ? fmtPrice(d[`nearest_support_${tf}`]) : "—"}</span></div>
@@ -1233,7 +1267,7 @@ document.querySelectorAll(".tf-btn").forEach(btn => {
 });
 
 document.getElementById("trendStatusPanel").addEventListener("click", (e) => {
-  const pill = e.target.closest(".mtf-pill");
+  const pill = e.target.closest(".mtf-card");
   if (pill) switchTrendTf(pill.dataset.tf);
 });
 
