@@ -1132,7 +1132,11 @@ function drawTrendChart(canvas, data, tf) {
   const col = name => style.getPropertyValue(name).trim();
   const upCol = col("--up"), downCol = col("--down"), accentCol = col("--accent"), amberCol = col("--amber"), textCol = col("--text");
 
-  const shown = candles.slice(-120);
+  // Candle count to show varies by timeframe — a flat 120 candles means
+  // ~15 trading days on 1H (too zoomed out to read), vs. only ~5 hours on
+  // 5M. Roughly balances each view to a few trading days of context.
+  const SHOWN_COUNT = { "5m": 130, "15m": 100, "1h": 35 };
+  const shown = candles.slice(-(SHOWN_COUNT[tf] || 120));
   const lo = Math.min(...shown.map(c => c.low));
   const hi = Math.max(...shown.map(c => c.high));
   const pad = (hi - lo) * 0.08 || 1;
@@ -1192,6 +1196,13 @@ function drawTrendChart(canvas, data, tf) {
       ctx.stroke();
       ctx.lineWidth = 1;
     }
+  } else {
+    // Sideways = no consistent HH/HL or LH/LL run right now, so there's
+    // genuinely no trendline to draw here — say so explicitly instead of
+    // silently showing nothing (which reads as a missing feature/bug).
+    ctx.fillStyle = amberCol; ctx.font = "10px " + col("--mono"); ctx.textAlign = "center";
+    ctx.fillText(`No trendline — ${tf.toUpperCase()} structure is sideways right now`, marginL + plotW / 2, marginT + 14);
+    ctx.textAlign = "left";
   }
 
   const trendStart = data[`trend_start_${tf}`];
