@@ -638,6 +638,9 @@ def angelone_historical():
     return angelone_candles(angelone_session(), "NSE", "99926000")
 
 
+TREND_5M_DAYS = 20   # 5m candles are ~3x the row count of 15m for the same
+                     # days, and noisier per-candle — a shorter window is
+                     # plenty and keeps the fetch/backoff cheap
 TREND_15M_DAYS = 45  # tunable — no confirmed Angel One max-range-per-request
 TREND_1H_DAYS = 90   # limit exists in this repo; see _fetch_with_range_backoff
 
@@ -661,6 +664,11 @@ def _fetch_with_range_backoff(fetch_fn, days, min_days=5):
                 continue
             raise
     raise RuntimeError(f"angelone: no usable range down to {min_days} days") from last_err
+
+
+def angelone_intraday_5m(headers, exchange="NSE", symboltoken="99926000", days=TREND_5M_DAYS):
+    return _fetch_with_range_backoff(
+        lambda d: angelone_candles(headers, exchange, symboltoken, days=d, interval="FIVE_MINUTE"), days)
 
 
 def angelone_intraday_15m(headers, exchange="NSE", symboltoken="99926000", days=TREND_15M_DAYS):
@@ -1389,9 +1397,17 @@ TREND_STALE_MULTIPLIER = 2  # candle considered stale after this many missed
                              # intervals of no new closed candle
 
 _TREND_CFG = dict(trend_engine.DEFAULT_CONFIG)
-_LIVE_TREND_STATE = {"15m": trend_engine.TrendState(_TREND_CFG),
+# 5m candles move less per bar than 15m/1h — reusing the 15m config's
+# min_swing_move_pct would treat far more ordinary noise as real swings
+# (constant whipsaw). Halved here as a starting point; tune further once
+# live 5m behavior is actually observed.
+_TREND_CFG_5M = dict(trend_engine.DEFAULT_CONFIG,
+                      min_swing_move_pct=trend_engine.DEFAULT_CONFIG["min_swing_move_pct"] / 2)
+_LIVE_TREND_STATE = {"5m": trend_engine.TrendState(_TREND_CFG_5M),
+                      "15m": trend_engine.TrendState(_TREND_CFG),
                       "1h": trend_engine.TrendState(_TREND_CFG)}
-_TREND_INTERVAL_SECONDS = {"15m": 15 * 60, "1h": 60 * 60}
+_TREND_INTERVAL_SECONDS = {"5m": 5 * 60, "15m": 15 * 60, "1h": 60 * 60}
+TREND_TIMEFRAMES = ("5m", "15m", "1h")
 
 
 def _forming_candle(tf, last_closed_ts, current_price):
@@ -1406,12 +1422,15 @@ def _forming_candle(tf, last_closed_ts, current_price):
     return {"open_ts": open_ts, "closes_at": open_ts + span, "last_price": current_price}
 
 
+_TREND_FETCHERS = {
+    "5m": angelone_intraday_5m, "15m": angelone_intraday_15m, "1h": angelone_intraday_1h,
+}
+
+
 def build_trend():
     headers = angelone_session()
-    raw15 = _angelone_rate_limited_retry(lambda: angelone_intraday_15m(headers))
-    raw60 = _angelone_rate_limited_retry(lambda: angelone_intraday_1h(headers))
-    c15 = trend_engine.normalize_candles(raw15, "15m")
-    c60 = trend_engine.normalize_candles(raw60, "1h")
+    raw = {tf: _angelone_rate_limited_retry(lambda tf=tf: _TREND_FETCHERS[tf](headers)) for tf in TREND_TIMEFRAMES}
+    candles = {tf: trend_engine.normalize_candles(raw[tf], tf) for tf in TREND_TIMEFRAMES}
 
     try:
         current_price = _angelone_rate_limited_retry(lambda: angelone_ltp(headers, "NSE", "99926000"))
@@ -1421,39 +1440,47 @@ def build_trend():
     now = time.time()
     stale = {}
     forming = {}
-    for tf, candles in (("15m", c15), ("1h", c60)):
-        last_ts = candles[-1]["ts"] if candles else None
+    for tf in TREND_TIMEFRAMES:
+        last_ts = candles[tf][-1]["ts"] if candles[tf] else None
         stale[tf] = last_ts is None or (now - last_ts) > _TREND_INTERVAL_SECONDS[tf] * TREND_STALE_MULTIPLIER
         forming[tf] = _forming_candle(tf, last_ts, current_price)
 
-    data_status = "stale" if (stale["15m"] or stale["1h"]) else "live"
+    data_status = "stale" if any(stale.values()) else "live"
 
     if data_status == "live":
-        trend_engine.advance_live_trend(_LIVE_TREND_STATE["15m"], c15)
-        trend_engine.advance_live_trend(_LIVE_TREND_STATE["1h"], c60)
+        for tf in TREND_TIMEFRAMES:
+            trend_engine.advance_live_trend(_LIVE_TREND_STATE[tf], candles[tf])
 
-    snap15 = trend_engine.snapshot(_LIVE_TREND_STATE["15m"])
-    snap60 = trend_engine.snapshot(_LIVE_TREND_STATE["1h"])
+    snap = {tf: trend_engine.snapshot(_LIVE_TREND_STATE[tf]) for tf in TREND_TIMEFRAMES}
 
-    return {
+    out = {
         "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
         "data_status": data_status,
         "current_price": current_price,
-        "trend_15m": snap15["trend"], "trend_1h": snap60["trend"],
-        "trend_start_15m": snap15["trend_start"], "trend_start_1h": snap60["trend_start"],
-        "reversal": snap15["reversal"],
-        "structure_sequence_15m": snap15["structure_sequence"],
-        "structure_sequence_1h": snap60["structure_sequence"],
-        "swings_15m": snap15["swings"], "swings_1h": snap60["swings"],
-        "zones_15m": snap15["zones"], "zones_1h": snap60["zones"],
-        "breakouts_15m": snap15["breakouts"], "breakdowns_15m": snap15["breakdowns"],
-        "retests_15m": snap15["retests"],
-        "nearest_support": snap15["nearest_support"], "nearest_resistance": snap15["nearest_resistance"],
-        "invalidation_level": snap15["invalidation_level"],
-        "candles_15m": snap15["candles"], "candles_1h": snap60["candles"],
-        "forming_15m": forming["15m"], "forming_1h": forming["1h"],
-        "config": snap15["config"],
+        "reversal": snap["15m"]["reversal"],
+        "config": snap["15m"]["config"],
     }
+    for tf in TREND_TIMEFRAMES:
+        s = snap[tf]
+        out[f"trend_{tf}"] = s["trend"]
+        out[f"trend_start_{tf}"] = s["trend_start"]
+        out[f"structure_sequence_{tf}"] = s["structure_sequence"]
+        out[f"swings_{tf}"] = s["swings"]
+        out[f"zones_{tf}"] = s["zones"]
+        out[f"breakouts_{tf}"] = s["breakouts"]
+        out[f"breakdowns_{tf}"] = s["breakdowns"]
+        out[f"retests_{tf}"] = s["retests"]
+        out[f"nearest_support_{tf}"] = s["nearest_support"]
+        out[f"nearest_resistance_{tf}"] = s["nearest_resistance"]
+        out[f"invalidation_level_{tf}"] = s["invalidation_level"]
+        out[f"candles_{tf}"] = s["candles"]
+        out[f"forming_{tf}"] = forming[tf]
+    # Back-compat flat aliases (15m was the only primary timeframe before
+    # 5m/1h became independently selectable) — keep pointing at 15m.
+    out["nearest_support"] = out["nearest_support_15m"]
+    out["nearest_resistance"] = out["nearest_resistance_15m"]
+    out["invalidation_level"] = out["invalidation_level_15m"]
+    return out
 
 
 def _trend_loop():
@@ -1730,15 +1757,17 @@ class Handler(BaseHTTPRequestHandler):
                         CACHE["trend"] = snap
                 except Exception as exc:
                     snap = {"error": str(exc), "data_status": "stale", "current_price": None,
-                            "trend_15m": None, "trend_1h": None,
-                            "trend_start_15m": None, "trend_start_1h": None, "reversal": None,
-                            "structure_sequence_15m": [], "structure_sequence_1h": [],
-                            "swings_15m": [], "swings_1h": [], "zones_15m": [], "zones_1h": [],
-                            "breakouts_15m": [], "breakdowns_15m": [], "retests_15m": [],
-                            "nearest_support": None, "nearest_resistance": None,
-                            "invalidation_level": None, "candles_15m": [], "candles_1h": [],
-                            "forming_15m": None, "forming_1h": None,
+                            "reversal": None, "config": {},
+                            "nearest_support": None, "nearest_resistance": None, "invalidation_level": None,
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
+                    for tf in TREND_TIMEFRAMES:
+                        snap.update({
+                            f"trend_{tf}": None, f"trend_start_{tf}": None,
+                            f"structure_sequence_{tf}": [], f"swings_{tf}": [], f"zones_{tf}": [],
+                            f"breakouts_{tf}": [], f"breakdowns_{tf}": [], f"retests_{tf}": [],
+                            f"nearest_support_{tf}": None, f"nearest_resistance_{tf}": None,
+                            f"invalidation_level_{tf}": None, f"candles_{tf}": [], f"forming_{tf}": None,
+                        })
             body = json.dumps(snap).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
         elif path == "/api/optionchain":
