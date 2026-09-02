@@ -332,8 +332,19 @@ def _structure_signal(state):
     r = state.possible_reversal
     if r is None:
         if state.trend == "sideways":
-            return {"status": "trend_intact", "label": "No trend", "direction": None,
-                    "detail": "No established HH/HL or LH/LL run right now."}
+            tail = state.structure_sequence[-4:]
+            if tail:
+                # Never say "no trend" with no explanation while a real swing
+                # sequence is visible right below it on the UI — that reads as
+                # contradictory. Name the actual swings and why they don't
+                # qualify (mixed/counter-trend labels in the sequence).
+                return {"status": "trend_intact", "label": "No confirmed trend — range/sideways",
+                        "direction": None,
+                        "detail": f"Recent swings ({' → '.join(tail)}) don't form a clean HH+HL (bullish) "
+                                  f"or LH+LL (bearish) run yet — price is contained inside a range, not "
+                                  f"trending either way."}
+            return {"status": "trend_intact", "label": "No trend yet", "direction": None,
+                    "detail": "Not enough confirmed swings yet to read any structure."}
         return {"status": "trend_intact", "label": f"{state.trend.capitalize()} trend intact — BOS",
                 "direction": state.trend,
                 "detail": "Latest swings continue the existing trend. No counter-trend swing forming."}
@@ -609,3 +620,69 @@ def multi_timeframe_read(trend_1h, trend_15m, trend_5m):
                       f"{trend_1h} — this reads as a likely {move_name} inside a {trend_1h} 1H trend, "
                       f"not a confirmed {trend_15m} move. "
                       f"Don't jump straight to {side} without waiting for 1H to align too."}
+
+
+def trade_setup_state(mtf, trend_15m, breakouts_15m, breakdowns_15m, retests_15m,
+                       fake_breakouts_15m, now_i, window=6):
+    """Deterministic WAIT / WATCHING / SETUP FORMING / STRUCTURE CONFIRMED —
+    where you are in the manual decision funnel (1H context -> 15M direction
+    -> 5M timing -> confirmation), never a buy/sell instruction. Built
+    entirely from multi_timeframe_read()'s output plus recent 15M
+    breakout/retest/fake-breakout events — no new inputs, no AI."""
+    if not mtf:
+        return {"status": "wait", "label": "WAIT", "why": "No read available yet.", "watch_for": ""}
+    action = mtf["action"]
+
+    if action in ("no_entry", "wait_no_setup"):
+        return {"status": "wait", "label": "WAIT", "why": mtf["detail"],
+                "watch_for": "15M to establish a clear HH+HL or LH+LL direction, "
+                             "with 5M able to time an entry off it."}
+
+    if action == "wait_counter_move":
+        return {"status": "watching", "label": "WATCHING", "why": mtf["detail"],
+                "watch_for": f"5M to resume {trend_15m} before this becomes a real setup."}
+
+    if action in ("wait_pullback", "wait_bounce"):
+        return {"status": "watching", "label": "WATCHING", "why": mtf["detail"],
+                "watch_for": "1H to align with 15M/5M, or a fresh 1H structural shift."}
+
+    # Remaining actions (ce_setup/pe_setup/partial_ce/partial_pe) all mean
+    # 15M and 5M already agree on direction — check whether a real (not
+    # fake) breakout/retest recently backed that up before calling it
+    # "confirmed" rather than just "forming".
+    direction = "bullish" if trend_15m == "bullish" else "bearish"
+
+    def recent(events):
+        for ev in reversed(events or []):
+            if ev.get("i", -10**9) >= now_i - window and ev.get("direction") == direction:
+                return ev
+        return None
+
+    fake = recent(fake_breakouts_15m)
+    breakout_ev = recent(breakouts_15m if direction == "bullish" else breakdowns_15m)
+    retest_ev = None
+    for ev in reversed(retests_15m or []):
+        if ev.get("i", -10**9) >= now_i - window and ev.get("direction") == direction and ev.get("result") == "confirmed":
+            retest_ev = ev
+            break
+
+    if fake and not breakout_ev and not retest_ev:
+        return {"status": "setup_forming", "label": "SETUP FORMING",
+                "why": f"15M and 5M both {direction}, but the nearest {direction} breakout was a fake "
+                       f"one (level {fake['level']} broke, then failed to hold) — no real confirmation yet.",
+                "watch_for": "A fresh break + close + hold/retest before treating this as confirmed."}
+
+    if retest_ev:
+        return {"status": "structure_confirmed", "label": "STRUCTURE CONFIRMED",
+                "why": f"15M and 5M both {direction}, and a {direction} retest just confirmed "
+                       f"(held at {retest_ev['zone_mid']}).",
+                "watch_for": "Manually reviewing the option chain is now reasonable — still your decision."}
+    if breakout_ev:
+        return {"status": "structure_confirmed", "label": "STRUCTURE CONFIRMED",
+                "why": f"15M and 5M both {direction}, backed by a real {direction} "
+                       f"{'breakout' if direction == 'bullish' else 'breakdown'} at {breakout_ev['price']}.",
+                "watch_for": "Manually reviewing the option chain is now reasonable — still your decision."}
+
+    return {"status": "setup_forming", "label": "SETUP FORMING", "why": mtf["detail"],
+            "watch_for": f"A real (close-confirmed, held) {direction} breakout/breakdown or retest "
+                         f"near the nearest zone before treating this as confirmed."}

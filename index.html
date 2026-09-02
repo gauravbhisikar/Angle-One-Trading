@@ -300,16 +300,57 @@
   .hc-dist.breakout { color: var(--accent); font-weight: 600; }
   .hc-dist.muted { color: var(--muted); }
 
-  .chart-toolbar { display: flex; gap: 8px; margin: 16px 0 10px; }
-  .tf-btn {
-    font-size: 11px; font-weight: 600; padding: 6px 14px; border-radius: 8px;
-    border: 1px solid var(--line); background: var(--surface); color: var(--muted); cursor: pointer;
+  .chart-grid-mtf { margin-top: 16px; display: flex; flex-direction: column; gap: 12px; }
+  .chart-panel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 720px) { .chart-panel-row { grid-template-columns: 1fr; } }
+  .chart-panel-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--faint);
+    font-weight: 700; margin-bottom: 6px;
   }
-  .tf-btn.active { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
-  #trendChart {
+  .chart-panel canvas, .chart-panel-primary canvas {
     width: 100%; display: block; border: 1px solid var(--line); border-radius: 12px;
     background: var(--surface); box-shadow: var(--shadow);
   }
+  .setup-state-card {
+    margin-top: 12px; padding: 14px 16px; border-radius: 10px; border: 1px solid var(--line);
+  }
+  .setup-state-card .ss-label {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--faint); font-weight: 700;
+  }
+  .setup-state-card .ss-status { font-size: 15px; font-weight: 800; margin: 4px 0 6px; }
+  .setup-state-card.wait { border-color: var(--line); }
+  .setup-state-card.wait .ss-status { color: var(--muted); }
+  .setup-state-card.watching .ss-status { color: var(--amber); }
+  .setup-state-card.setup_forming .ss-status { color: var(--accent); }
+  .setup-state-card.structure_confirmed .ss-status { color: var(--up); }
+  .setup-state-card .ss-why { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .setup-state-card .ss-watch { font-size: 11px; color: var(--faint); margin-top: 6px; line-height: 1.5; }
+  .setup-state-card .ss-watch b { color: var(--muted); }
+  .events-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px;
+    margin-top: 12px;
+  }
+  .event-cell {
+    padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface2);
+  }
+  .event-cell .ec-label {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--faint); font-weight: 700;
+  }
+  .event-cell .ec-val { font-size: 12.5px; font-weight: 700; margin-top: 4px; }
+  .event-cell.none .ec-val { color: var(--faint); font-weight: 500; }
+  .event-cell.up .ec-val { color: var(--up); }
+  .event-cell.down .ec-val { color: var(--down); }
+  .event-cell.flat .ec-val { color: var(--amber); }
+  .event-cell .ec-sub { font-size: 10px; color: var(--muted); margin-top: 3px; line-height: 1.4; }
+  .whatchanges { margin-top: 12px; padding: 12px 14px; border-radius: 10px; border: 1px dashed var(--line); }
+  .whatchanges .wc-label {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--faint); font-weight: 700;
+    margin-bottom: 6px; display: block;
+  }
+  .whatchanges .wc-row { font-size: 11.5px; line-height: 1.6; }
+  .whatchanges .wc-row b { color: var(--muted); }
+  .whatchanges .wc-row.up b { color: var(--up); }
+  .whatchanges .wc-row.down b { color: var(--down); }
   .trend-status .trend-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     gap: 12px; margin-top: 14px;
@@ -595,12 +636,22 @@
 
   <div id="panel-trend" class="hidden">
     <div id="trendStatusPanel"></div>
-    <div class="chart-toolbar">
-      <button class="tf-btn" data-tf="5m" title="5-minute candles — fastest, noisiest read; use for timing entries once 15M/1H already agree on direction">5M</button>
-      <button class="tf-btn active" data-tf="15m" title="15-minute candles — the primary structure read; this is what the TREND badge above shows by default">15M</button>
-      <button class="tf-btn" data-tf="1h" title="1-hour candles — same rules, coarser timeframe; use as a bias filter, don't fight this direction on the faster timeframes">1H</button>
+    <div class="chart-grid-mtf">
+      <div class="chart-panel chart-panel-primary">
+        <div class="chart-panel-label">15M · PRIMARY (trading direction/setup)</div>
+        <canvas id="trendChart15m"></canvas>
+      </div>
+      <div class="chart-panel-row">
+        <div class="chart-panel">
+          <div class="chart-panel-label">1H · CONTEXT (overall market direction)</div>
+          <canvas id="trendChart1h"></canvas>
+        </div>
+        <div class="chart-panel">
+          <div class="chart-panel-label">5M · ENTRY TIMING ONLY</div>
+          <canvas id="trendChart5m"></canvas>
+        </div>
+      </div>
     </div>
-    <canvas id="trendChart"></canvas>
   </div>
 
   <div id="panel-optionchain" class="hidden">
@@ -1076,7 +1127,7 @@ function trendStatusHTML(d) {
     const tt = d[`trend_${t}`] || "sideways";
     const tcls = tt === "bullish" ? "up" : tt === "bearish" ? "down" : "flat";
     const temoji = tt === "bullish" ? "🟢" : tt === "bearish" ? "🔴" : "🟡";
-    return `<div class="mtf-card ${tcls} ${t === tf ? "mtf-active" : ""}" data-tf="${t}" title="Click to switch the chart/details below to ${t.toUpperCase()}">
+    return `<div class="mtf-card ${tcls} ${t === tf ? "mtf-active" : ""}" data-tf="${t}" title="Click to switch the structure/events detail panel below to ${t.toUpperCase()} — the three charts always show all timeframes at once">
       <div class="mtf-card-tf">${t.toUpperCase()}</div>
       <div class="mtf-card-role">${TF_ROLE[t]}</div>
       <div class="mtf-card-val">${temoji} ${esc(tt.toUpperCase())}</div>
@@ -1084,6 +1135,71 @@ function trendStatusHTML(d) {
   };
   const mtf = d.mtf_read;
   const mtfCls = mtf && mtf.action ? (mtf.action.includes("ce") ? "up" : mtf.action.includes("pe") ? "down" : "flat") : "flat";
+
+  const setup = d.setup_state;
+  const now15 = (d.candles_15m || []).length - 1;
+
+  const eventCell = (label, val, cls, sub) =>
+    `<div class="event-cell ${cls}"><div class="ec-label">${label}</div><div class="ec-val">${esc(val)}</div>${sub ? `<div class="ec-sub">${esc(sub)}</div>` : ""}</div>`;
+
+  const structureEventsHTML = () => {
+    const bosArr = d[`bos_events_${tf}`] || [];
+    const chochArr = d[`choch_events_${tf}`] || [];
+    const boArr = d[`breakouts_${tf}`] || [];
+    const bdArr = d[`breakdowns_${tf}`] || [];
+    const rtArr = d[`retests_${tf}`] || [];
+    const sigNow = d[`structure_signal_${tf}`];
+    const nowI = (d[`candles_${tf}`] || []).length - 1;
+    const isRecent = ev => ev && nowI - ev.i <= 8;
+
+    const bos = bosArr.length ? bosArr[bosArr.length - 1] : null;
+    const choch = chochArr.length ? chochArr[chochArr.length - 1] : null;
+    const lastBo = boArr.length ? boArr[boArr.length - 1] : null;
+    const lastBd = bdArr.length ? bdArr[bdArr.length - 1] : null;
+    const breakoutEv = [lastBo, lastBd].filter(Boolean).sort((a, b) => b.i - a.i)[0] || null;
+    const rt = rtArr.length ? rtArr[rtArr.length - 1] : null;
+    const pullback = sigNow && sigNow.status === "pullback_watch";
+
+    return `
+    <div class="events-grid">
+      ${eventCell("BOS", isRecent(bos) ? `${bos.direction === "bullish" ? "🟢" : "🔴"} ${bos.label}` : "NONE",
+                   isRecent(bos) ? (bos.direction === "bullish" ? "up" : "down") : "none",
+                   isRecent(bos) ? `${fmtDate(bos.ts)}, ${fmtTime(bos.ts)}` : "")}
+      ${eventCell("CHoCH", isRecent(choch) ? `🔄 ${choch.direction.toUpperCase()}` : "NONE",
+                   isRecent(choch) ? (choch.direction === "bullish" ? "up" : "down") : "none",
+                   isRecent(choch) ? `Broke ${fmtPrice(choch.trigger_level)}, closed ${fmtPrice(choch.price)}` : "")}
+      ${eventCell("PULLBACK", pullback ? `👀 YES (${sigNow.direction})` : "NONE",
+                   pullback ? "flat" : "none",
+                   pullback ? "Counter-trend swing forming, trend intact so far" : "")}
+      ${eventCell(breakoutEv && breakoutEv.direction === "bearish" ? "BREAKDOWN" : "BREAKOUT",
+                   isRecent(breakoutEv) ? `${breakoutEv.direction === "bullish" ? "🟢 broke up" : "🔴 broke down"}` : "NONE",
+                   isRecent(breakoutEv) ? (breakoutEv.direction === "bullish" ? "up" : "down") : "none",
+                   isRecent(breakoutEv) ? `Level ${fmtPrice(breakoutEv.zone_mid)}, closed ${fmtPrice(breakoutEv.price)}` : "")}
+      ${eventCell("RETEST", isRecent(rt) ? `${rt.result === "confirmed" ? "✅ held" : "❌ failed"} (${rt.direction})` : "NONE",
+                   isRecent(rt) ? (rt.result === "confirmed" ? "up" : "down") : "none",
+                   isRecent(rt) ? `Zone ${fmtPrice(rt.zone_mid)}` : "")}
+    </div>`;
+  };
+
+  const whatChangesHTML = () => {
+    const trendTf = d[`trend_${tf}`] || "sideways";
+    const sup = d[`nearest_support_${tf}`], res = d[`nearest_resistance_${tf}`], inv = d[`invalidation_level_${tf}`];
+    if (trendTf === "sideways") {
+      return `
+      <div class="whatchanges">
+        <span class="wc-label">WHAT CHANGES THIS READ</span>
+        <div class="wc-row up"><b>Bullish:</b> ${tfLabel} closes above resistance (${res != null ? fmtPrice(res) : "—"}) + structure confirms (BOS/CHoCH).</div>
+        <div class="wc-row down"><b>Bearish:</b> ${tfLabel} closes below support (${sup != null ? fmtPrice(sup) : "—"}) + structure confirms (BOS/CHoCH).</div>
+      </div>`;
+    }
+    const bullish = trendTf === "bullish";
+    return `
+    <div class="whatchanges">
+      <span class="wc-label">WHAT CHANGES THIS READ</span>
+      <div class="wc-row ${bullish ? "up" : "down"}"><b>${bullish ? "Bullish continuation" : "Bearish continuation"}:</b> BOS / structure holds above the invalidation level (${inv != null ? fmtPrice(inv) : "—"}).</div>
+      <div class="wc-row ${bullish ? "down" : "up"}"><b>${bullish ? "Bearish transition" : "Bullish transition"}:</b> break of the invalidation level (${inv != null ? fmtPrice(inv) : "—"}) → ${bullish ? "bearish" : "bullish"} CHoCH → needs a further ${bullish ? "LH + LL" : "HL + HH"} pair to confirm.</div>
+    </div>`;
+  };
 
   const sig = d[`structure_signal_${tf}`];
   const sigCls = sig && sig.direction === "bullish" ? "up" : sig && sig.direction === "bearish" ? "down" : "flat";
@@ -1107,6 +1223,14 @@ function trendStatusHTML(d) {
       <span class="mtf-verdict-label">MULTI-TIMEFRAME READ</span>
       <span class="mtf-verdict-text">${esc(mtf.verdict)}</span>
       <div class="mtf-verdict-detail">${esc(mtf.detail)}</div>
+    </div>` : ""}
+    ${setup ? `
+    <div class="setup-state-card ${setup.status}">
+      <span class="ss-label">TRADE SETUP STATE (15M direction / 5M timing)</span>
+      <div class="ss-status">${setup.label}</div>
+      <div class="ss-why">${esc(setup.why)}</div>
+      ${setup.watch_for ? `<div class="ss-watch"><b>Watching for:</b> ${esc(setup.watch_for)}</div>` : ""}
+      <div class="ss-watch" style="margin-top:8px;">Never a buy/sell signal — this only tells you where you are in the manual decision funnel (context → direction → timing → confirmation). You decide the trade.</div>
     </div>` : ""}
     ${sig ? `
     <div class="mtf-verdict ${sigCls}">
@@ -1137,6 +1261,8 @@ function trendStatusHTML(d) {
       <div title="The price level that would undo the current ${tfLabel} trend read if broken — the most recent confirmed swing this trend rests on"><span class="tg-label">INVALIDATION LEVEL</span><span class="tg-val">${d[`invalidation_level_${tf}`] != null ? fmtPrice(d[`invalidation_level_${tf}`]) : "—"}</span></div>
       ${trendStart ? `<div title="Candle where the current unbroken HH/HL or LH/LL run began — also marked on the chart below"><span class="tg-label">TREND STARTED</span><span class="tg-val">${fmtDate(trendStart.ts)}, ${fmtTime(trendStart.ts)}</span></div>` : ""}
     </div>
+    ${structureEventsHTML()}
+    ${whatChangesHTML()}
     <div class="trend-candle-status ${stale_date ? "date-stale" : ""}">
       ${stale_date ? "⚠️ " : ""}Last closed candle: ${fmtDate(lastClosedTs) || "—"}, ${fmtTime(lastClosedTs)}
       ${forming ? `· Current candle: ${fmtTime(forming.open_ts)}–${fmtTime(forming.closes_at)} <span class="forming-tag" title="This candle hasn't closed yet — it's never used to confirm a swing, only shown as a live reference">FORMING</span>` : ""}
@@ -1155,12 +1281,12 @@ function trendStatusHTML(d) {
   </div>`;
 }
 
-function drawTrendChart(canvas, data, tf) {
+function drawTrendChart(canvas, data, tf, cssH = 420) {
   if (!canvas || !data) return;
   const candles = data[`candles_${tf}`] || [];
   if (!candles.length) return;
   const dpr = window.devicePixelRatio || 1;
-  const cssW = canvas.clientWidth || 900, cssH = 420;
+  const cssW = canvas.clientWidth || 900;
   canvas.width = cssW * dpr; canvas.height = cssH * dpr;
   canvas.style.height = cssH + "px";
   const ctx = canvas.getContext("2d");
@@ -1316,25 +1442,28 @@ async function loadTrend() {
     document.getElementById("tabCountT").textContent =
       (d.breakouts_15m || []).length + (d.breakdowns_15m || []).length;
     document.getElementById("trendStatusPanel").innerHTML = trendStatusHTML(d);
-    drawTrendChart(document.getElementById("trendChart"), d, currentTrendTf);
+    drawAllTrendCharts(d);
   } catch (e) {
     document.getElementById("trendStatusPanel").innerHTML =
       `<div class="errbanner">Could not load trend — ${esc(e.message)}</div>`;
   }
 }
 
-function switchTrendTf(tf) {
-  currentTrendTf = tf;
-  document.querySelectorAll(".tf-btn").forEach(b => b.classList.toggle("active", b.dataset.tf === tf));
-  if (trendData) {
-    document.getElementById("trendStatusPanel").innerHTML = trendStatusHTML(trendData);
-    drawTrendChart(document.getElementById("trendChart"), trendData, currentTrendTf);
-  }
+function drawAllTrendCharts(d) {
+  drawTrendChart(document.getElementById("trendChart15m"), d, "15m", 380);
+  drawTrendChart(document.getElementById("trendChart1h"), d, "1h", 220);
+  drawTrendChart(document.getElementById("trendChart5m"), d, "5m", 220);
 }
 
-document.querySelectorAll(".tf-btn").forEach(btn => {
-  btn.addEventListener("click", () => switchTrendTf(btn.dataset.tf));
-});
+function switchTrendTf(tf) {
+  // Only switches which timeframe's DETAIL panel (structure/events/S-R/
+  // setup-explanation) is shown below — all three charts always render
+  // simultaneously regardless of this selection.
+  currentTrendTf = tf;
+  if (trendData) {
+    document.getElementById("trendStatusPanel").innerHTML = trendStatusHTML(trendData);
+  }
+}
 
 document.getElementById("trendStatusPanel").addEventListener("click", (e) => {
   const pill = e.target.closest(".mtf-card");
