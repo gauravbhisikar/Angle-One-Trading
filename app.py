@@ -1470,6 +1470,10 @@ def build_trend():
         out[f"breakouts_{tf}"] = s["breakouts"]
         out[f"breakdowns_{tf}"] = s["breakdowns"]
         out[f"retests_{tf}"] = s["retests"]
+        out[f"fake_breakouts_{tf}"] = s["fake_breakouts"]
+        out[f"bos_events_{tf}"] = s["bos_events"]
+        out[f"choch_events_{tf}"] = s["choch_events"]
+        out[f"structure_signal_{tf}"] = s["structure_signal"]
         out[f"nearest_support_{tf}"] = s["nearest_support"]
         out[f"nearest_resistance_{tf}"] = s["nearest_resistance"]
         out[f"invalidation_level_{tf}"] = s["invalidation_level"]
@@ -1766,6 +1770,8 @@ class Handler(BaseHTTPRequestHandler):
                             f"trend_{tf}": None, f"trend_start_{tf}": None,
                             f"structure_sequence_{tf}": [], f"swings_{tf}": [], f"zones_{tf}": [],
                             f"breakouts_{tf}": [], f"breakdowns_{tf}": [], f"retests_{tf}": [],
+                            f"fake_breakouts_{tf}": [], f"bos_events_{tf}": [], f"choch_events_{tf}": [],
+                            f"structure_signal_{tf}": None,
                             f"nearest_support_{tf}": None, f"nearest_resistance_{tf}": None,
                             f"invalidation_level_{tf}": None, f"candles_{tf}": [], f"forming_{tf}": None,
                         })

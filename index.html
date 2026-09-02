@@ -1076,6 +1076,15 @@ function trendStatusHTML(d) {
   };
   const mtf = d.mtf_read;
   const mtfCls = mtf && mtf.action ? (mtf.action.includes("ce") ? "up" : mtf.action.includes("pe") ? "down" : "flat") : "flat";
+
+  const sig = d[`structure_signal_${tf}`];
+  const sigCls = sig && sig.direction === "bullish" ? "up" : sig && sig.direction === "bearish" ? "down" : "flat";
+  const sigEmoji = sig && sig.status === "choch_confirmed" ? "🔄" : sig && sig.status === "pullback_watch" ? "👀" : "✅";
+
+  const fakeBos = d[`fake_breakouts_${tf}`] || [];
+  const recentFake = fakeBos.length ? fakeBos[fakeBos.length - 1] : null;
+  const fakeIsRecent = recentFake && lastCandles.length && recentFake.i >= lastCandles.length - 6;
+
   return `
   <div class="bias trend-status ${cls}">
     <div class="bias-head">
@@ -1090,6 +1099,18 @@ function trendStatusHTML(d) {
       <span class="mtf-verdict-label">MULTI-TIMEFRAME READ</span>
       <span class="mtf-verdict-text">${esc(mtf.verdict)}</span>
       <div class="mtf-verdict-detail">${esc(mtf.detail)}</div>
+    </div>` : ""}
+    ${sig ? `
+    <div class="mtf-verdict ${sigCls}" title="BOS = Break of Structure (trend continues). CHoCH = Change of Character (a counter-trend swing broke through, structure may be shifting). A counter-trend swing alone is a pullback/bounce until price actually closes through the trigger level.">
+      <span class="mtf-verdict-label">${tfLabel} STRUCTURE SIGNAL (BOS / CHoCH / PULLBACK)</span>
+      <span class="mtf-verdict-text">${sigEmoji} ${esc(sig.label)}</span>
+      <div class="mtf-verdict-detail">${esc(sig.detail)}</div>
+    </div>` : ""}
+    ${fakeIsRecent ? `
+    <div class="mtf-verdict down" title="Break was not a wick — the candle closed beyond the level — but price closed back on the original side within a few candles, before the breakout could hold. Break is not the same as confirmation.">
+      <span class="mtf-verdict-label">⚠️ FAKE ${recentFake.direction === "bullish" ? "BREAKOUT" : "BREAKDOWN"} DETECTED</span>
+      <span class="mtf-verdict-text">Level ${fmtPrice(recentFake.level)} broke, then failed to hold</span>
+      <div class="mtf-verdict-detail">Don't chase ${recentFake.direction === "bullish" ? "CE" : "PE"} off this level alone — wait for a fresh break + close + hold/retest before treating it as real.</div>
     </div>` : ""}
     <div class="trend-grid">
       <div title="Sequence of confirmed swing highs/lows on ${tfLabel} candles — HH/HL = higher high/higher low (bullish), LH/LL = lower high/lower low (bearish)"><span class="tg-label">${tfLabel} STRUCTURE</span><span class="tg-val">${(d[`structure_sequence_${tf}`] || []).join(" → ") || "—"}</span></div>

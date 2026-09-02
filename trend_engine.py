@@ -17,6 +17,7 @@ DEFAULT_CONFIG = {
     "breakout_confirm": "close",
     "retest_tolerance_pct": 0.2,
     "retest_confirm_candles": 2,
+    "fake_breakout_window": 3,
 }
 
 
@@ -41,6 +42,20 @@ class RetestWatch:
         self.touched_at_i = None
 
 
+class BreakoutWatch:
+    """Tracks whether a just-broken level actually HOLDS for
+    fake_breakout_window candles, or fails immediately (price closes back
+    on the wrong side) — the "break != confirmation" check. Separate from
+    RetestWatch, which tests a later, slower return-and-hold behavior;
+    this catches an immediate snap-back within a few candles of the break."""
+    def __init__(self, zone, direction, broken_at_i, level):
+        self.zone = zone
+        self.direction = direction  # "bullish" | "bearish"
+        self.broken_at_i = broken_at_i
+        self.level = level
+        self.status = "watching"  # watching -> held | fake
+
+
 class TrendState:
     """Mutable accumulator for one timeframe. Feed closed candles one at a
     time via process_candle(), in strictly ascending ts order."""
@@ -58,6 +73,10 @@ class TrendState:
         self.breakouts = []
         self.breakdowns = []
         self.retests = []
+        self.breakout_watches = []  # BreakoutWatch objects, resolved within fake_breakout_window candles
+        self.fake_breakouts = []  # confirmed fake breakouts/breakdowns (direction field distinguishes)
+        self.bos_events = []  # Break of Structure — swing continues the already-established trend
+        self.choch_events = []  # Change of Character — confirmed trend-flip trigger (close through the swing that was holding the old trend)
         self.last_processed_ts = None
         self._last_confirmed_high_i = None
         self._last_confirmed_low_i = None
@@ -100,6 +119,24 @@ def _classify_structure(state, new_swing, prior):
     state.structure_sequence.append(label)
     state.structure_detail.append({"label": label, "i": new_swing["i"], "ts": new_swing["ts"]})
     return label
+
+
+_CONTINUATION_LABELS = {"bullish": ("HH", "HL"), "bearish": ("LH", "LL")}
+# The label that means "this swing itself broke through the swing that was
+# capping/supporting the OLD trend" — e.g. a confirmed HH while trend was
+# bearish literally means price closed past the most recent LH (classified
+# HH only because it's now higher than that LH). That IS the CHoCH break,
+# not just an early warning — unlike an HL forming while bearish (still
+# below the LH ceiling), which is only a heads-up (see _update_reversal).
+_BREAK_LABELS = {"bullish": "LL", "bearish": "HH"}
+
+
+def _log_bos(state, trend_before, label, swing):
+    """BOS (Break of Structure) = a new swing that continues the trend
+    already in place BEFORE this swing formed."""
+    if trend_before in _CONTINUATION_LABELS and label in _CONTINUATION_LABELS[trend_before]:
+        direction = "bullish" if trend_before == "bullish" else "bearish"
+        state.bos_events.append({"i": swing["i"], "ts": swing["ts"], "direction": direction, "label": label})
 
 
 def _cluster_into_zones(state, new_swing, cluster_pct):
@@ -153,18 +190,48 @@ def _check_breakout(state, i, candle, config):
     events = []
     for zone in state.zones:
         if zone["kind"] == "resistance" and candle["close"] > zone["hi"]:
+            level = zone["hi"]
             _flip_zone_kind(zone, "support", i)
             ev = {"i": i, "ts": candle["ts"], "price": candle["close"], "zone_mid": zone["mid"], "direction": "bullish"}
             state.breakouts.append(ev)
             events.append(("breakout", ev))
             state.retest_watches.append(RetestWatch(zone, "bullish", i))
+            state.breakout_watches.append(BreakoutWatch(zone, "bullish", i, level))
         elif zone["kind"] == "support" and candle["close"] < zone["lo"]:
+            level = zone["lo"]
             _flip_zone_kind(zone, "resistance", i)
             ev = {"i": i, "ts": candle["ts"], "price": candle["close"], "zone_mid": zone["mid"], "direction": "bearish"}
             state.breakdowns.append(ev)
             events.append(("breakdown", ev))
             state.retest_watches.append(RetestWatch(zone, "bearish", i))
+            state.breakout_watches.append(BreakoutWatch(zone, "bearish", i, level))
     return events
+
+
+def _advance_breakout_watches(state, i, candle, config):
+    """"Break != confirmation" check: a level broken this candle has
+    fake_breakout_window candles to actually hold. If price closes back
+    on the wrong side before then, it's a fake breakout/breakdown — the
+    zone flip is reverted and any RetestWatch spawned by that same break
+    is dropped, since there was nothing real to retest."""
+    window = config["fake_breakout_window"]
+    resolved = []
+    for w in state.breakout_watches:
+        if w.status != "watching":
+            continue
+        broke_back = (candle["close"] < w.level) if w.direction == "bullish" else (candle["close"] > w.level)
+        if broke_back:
+            w.status = "fake"
+            ev = {"i": i, "ts": candle["ts"], "direction": w.direction, "level": w.level, "broken_at_i": w.broken_at_i}
+            state.fake_breakouts.append(ev)
+            resolved.append(("fake_breakout", ev))
+            _flip_zone_kind(w.zone, "resistance" if w.direction == "bullish" else "support", i)
+            state.retest_watches = [rw for rw in state.retest_watches
+                                     if not (rw.zone is w.zone and rw.broken_at_i == w.broken_at_i)]
+        elif i - w.broken_at_i >= window:
+            w.status = "held"
+    state.breakout_watches = [w for w in state.breakout_watches if w.status == "watching"]
+    return resolved
 
 
 def _advance_retest_watches(state, i, candle, config):
@@ -218,8 +285,14 @@ def _update_reversal(state, i, candle, new_label):
                 state.possible_reversal["trigger_level"] = lh["price"]
         elif r and r["stage"] == "hl_formed_awaiting_break" and r["trigger_level"] is not None:
             if candle["close"] > r["trigger_level"]:
+                # CHoCH fires here (price closed through the LH that was
+                # capping the downtrend) — `trend` itself is left for
+                # _update_trend to flip organically once HL+HH confirms,
+                # matching Lesson 10/12: TREND stays the old value right
+                # after a CHoCH, only flips once structure truly confirms.
                 state.possible_reversal["stage"] = "confirmed"
-                state.trend = "bullish"
+                state.choch_events.append({"i": i, "ts": candle["ts"], "direction": "bullish",
+                                            "trigger_level": r["trigger_level"], "price": candle["close"]})
     elif state.trend == "bullish":
         if new_label == "LH":
             state.possible_reversal = {"direction": "bearish", "stage": "lh_formed_awaiting_break",
@@ -230,10 +303,8 @@ def _update_reversal(state, i, candle, new_label):
         elif r and r["stage"] == "lh_formed_awaiting_break" and r["trigger_level"] is not None:
             if candle["close"] < r["trigger_level"]:
                 state.possible_reversal["stage"] = "confirmed"
-                state.trend = "bearish"
-    else:
-        if state.possible_reversal and state.possible_reversal["stage"] == "confirmed":
-            state.possible_reversal = None
+                state.choch_events.append({"i": i, "ts": candle["ts"], "direction": "bearish",
+                                            "trigger_level": r["trigger_level"], "price": candle["close"]})
 
 
 def _invalidation_level(state):
@@ -244,6 +315,39 @@ def _invalidation_level(state):
         s = _last_swing_of_type(state, "high")
         return s["price"] if s else None
     return None
+
+
+def _structure_signal(state):
+    """Deterministic pullback-vs-reversal / BOS-vs-CHoCH summary for a UI
+    card. No AI — purely derived from possible_reversal + trend. Statuses:
+      trend_intact   - no counter-trend swing forming, trend continuing on BOS
+      pullback_watch - a counter-trend swing has formed (potential CHoCH),
+                        but price hasn't broken through the trigger level yet
+                        -> still just a pullback/bounce until it does
+      choch_confirmed - price closed through the trigger level: a CHoCH has
+                        fired and structure has shifted, though the new trend
+                        needs a further HH/HL (or LH/LL) pair to confirm more
+                        strongly
+    """
+    r = state.possible_reversal
+    if r is None:
+        if state.trend == "sideways":
+            return {"status": "trend_intact", "label": "No trend", "direction": None,
+                    "detail": "No established HH/HL or LH/LL run right now."}
+        return {"status": "trend_intact", "label": f"{state.trend.capitalize()} trend intact — BOS",
+                "direction": state.trend,
+                "detail": "Latest swings continue the existing trend. No counter-trend swing forming."}
+    if r["stage"] == "confirmed":
+        opposite = "LH" if r["direction"] == "bullish" else "HL"
+        need = "HL + HH" if r["direction"] == "bullish" else "LH + LL"
+        return {"status": "choch_confirmed", "label": f"{r['direction'].capitalize()} CHoCH confirmed",
+                "direction": r["direction"],
+                "detail": f"Price closed through the most recent {opposite} at {r['trigger_level']} — "
+                          f"structure has shifted. Still waiting for {need} to confirm the new trend more strongly."}
+    return {"status": "pullback_watch", "label": f"Possible {r['direction']} CHoCH forming",
+            "direction": r["direction"],
+            "detail": f"A counter-trend swing has formed. Still just a pullback/bounce unless price closes "
+                      f"through {r['trigger_level']}."}
 
 
 def _trend_start(state):
@@ -273,7 +377,7 @@ def process_candle(state, candle):
     i = len(state.candles) - 1
     config = state.config
     result = {"new_swing": None, "structure_event": None, "breakout": None,
-              "breakdown": None, "retest": None}
+              "breakdown": None, "retest": None, "fake_breakout": None}
 
     lookback = config["swing_lookback"]
     check_i = i - lookback
@@ -293,14 +397,41 @@ def process_candle(state, candle):
                     "confirmed_at_i": i, "confirmed_at": candle["ts"],
                     "confirmation_delay": i - check_i,
                 }
+                trend_before = state.trend
                 state.swings.append(swing)
                 result["new_swing"] = swing
                 label = _classify_structure(state, swing, prior)
                 result["structure_event"] = label
                 zone = _cluster_into_zones(state, swing, config["sr_cluster_pct"])
                 _update_trend(state)
+                # A confirmed CHoCH resolves once `trend` organically catches
+                # up to the direction it pointed to (HL+HH, or LH+LL, fully
+                # qualifies via _update_trend above) — at that point it's just
+                # a normal established trend again (BOS-labeled from here),
+                # not still-pending CHoCH info worth showing.
+                if (state.possible_reversal and state.possible_reversal.get("stage") == "confirmed"
+                        and state.trend == state.possible_reversal["direction"]):
+                    state.possible_reversal = None
                 if label:
-                    _update_reversal(state, i, candle, label)
+                    if trend_before in _BREAK_LABELS and label == _BREAK_LABELS[trend_before]:
+                        # This swing's own classification IS the break — no
+                        # need to wait for a later candle to close through a
+                        # trigger level, the break already happened right here.
+                        direction = "bearish" if trend_before == "bullish" else "bullish"
+                        state.choch_events.append({"i": swing["i"], "ts": swing["ts"], "direction": direction,
+                                                    "trigger_level": prior["price"] if prior else None,
+                                                    "price": swing["price"]})
+                        state.possible_reversal = {"direction": direction, "stage": "confirmed",
+                                                    "trigger_level": prior["price"] if prior else None}
+                        # Trend itself stays whatever _update_trend just computed from the
+                        # tail (usually "sideways" right here) — CHoCH is an early-but-real
+                        # signal, not proof of a new trend yet; `trend` only actually flips
+                        # once a further HH+HL (or LH+LL) pair organically qualifies, same
+                        # as Lesson 10/12's own worked example keeps TREND as the old value
+                        # right after a CHoCH fires.
+                    else:
+                        _log_bos(state, trend_before, label, swing)
+                        _update_reversal(state, i, candle, label)
 
     bo_events = _check_breakout(state, i, candle, config)
     for kind, ev in bo_events:
@@ -308,6 +439,10 @@ def process_candle(state, candle):
 
     rt_events = _advance_retest_watches(state, i, candle, config)
     for kind, ev in rt_events:
+        result[kind] = ev
+
+    fb_events = _advance_breakout_watches(state, i, candle, config)
+    for kind, ev in fb_events:
         result[kind] = ev
 
     state.last_processed_ts = candle["ts"]
@@ -349,6 +484,10 @@ def snapshot(state):
         "breakouts": list(state.breakouts[-10:]),
         "breakdowns": list(state.breakdowns[-10:]),
         "retests": list(state.retests[-10:]),
+        "fake_breakouts": list(state.fake_breakouts[-10:]),
+        "bos_events": list(state.bos_events[-10:]),
+        "choch_events": list(state.choch_events[-10:]),
+        "structure_signal": _structure_signal(state),
         "nearest_support": nearest_support["mid"] if nearest_support else None,
         "nearest_resistance": nearest_resistance["mid"] if nearest_resistance else None,
         "invalidation_level": _invalidation_level(state),
