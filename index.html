@@ -458,6 +458,13 @@
   .mtf-verdict.down .mtf-verdict-text { color: var(--down); }
   .mtf-verdict.flat .mtf-verdict-text { color: var(--amber); }
   .mtf-verdict-detail { font-size: 11.5px; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+  .sig-legend {
+    margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line);
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .sig-legend-row { font-size: 10.5px; color: var(--faint); line-height: 1.5; }
+  .sig-legend-row b { color: var(--muted); }
+  .sig-legend-note { font-style: italic; margin-top: 2px; }
   .chart-legend {
     display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; padding-top: 10px;
     border-top: 1px solid var(--line); font-size: 10.5px; color: var(--muted);
@@ -1101,16 +1108,26 @@ function trendStatusHTML(d) {
       <div class="mtf-verdict-detail">${esc(mtf.detail)}</div>
     </div>` : ""}
     ${sig ? `
-    <div class="mtf-verdict ${sigCls}" title="BOS = Break of Structure (trend continues). CHoCH = Change of Character (a counter-trend swing broke through, structure may be shifting). A counter-trend swing alone is a pullback/bounce until price actually closes through the trigger level.">
+    <div class="mtf-verdict ${sigCls}">
       <span class="mtf-verdict-label">${tfLabel} STRUCTURE SIGNAL (BOS / CHoCH / PULLBACK)</span>
       <span class="mtf-verdict-text">${sigEmoji} ${esc(sig.label)}</span>
       <div class="mtf-verdict-detail">${esc(sig.detail)}</div>
+      <div class="sig-legend">
+        <div class="sig-legend-row"><b>✅ BOS</b> (Break of Structure) — latest confirmed swing continued the existing trend (LH/LL while bearish, HH/HL while bullish). Nothing challenged it. Safest state.</div>
+        <div class="sig-legend-row"><b>👀 Possible CHoCH forming</b> — a counter-trend swing appeared (e.g. a higher low inside a bearish trend). Early warning only — still just a pullback/bounce, trend hasn't changed.</div>
+        <div class="sig-legend-row"><b>🔄 CHoCH confirmed</b> (Change of Character) — price closed through the swing that was capping/supporting the old trend. A real structural shift, but the TREND label above still shows the old direction until a further HH+HL (or LH+LL) pair organically confirms it.</div>
+        <div class="sig-legend-row sig-legend-note">If this card, the fake-breakout warning, and the multi-timeframe read ever seem to disagree: fake breakout beats everything (ignore that break) → then CHoCH confirmed → then possible CHoCH → then BOS. This card updates first; the multi-timeframe read is trend-label based and catches up slightly later — they're the same data, not conflicting opinions.</div>
+      </div>
     </div>` : ""}
     ${fakeIsRecent ? `
-    <div class="mtf-verdict down" title="Break was not a wick — the candle closed beyond the level — but price closed back on the original side within a few candles, before the breakout could hold. Break is not the same as confirmation.">
+    <div class="mtf-verdict down">
       <span class="mtf-verdict-label">⚠️ FAKE ${recentFake.direction === "bullish" ? "BREAKOUT" : "BREAKDOWN"} DETECTED</span>
       <span class="mtf-verdict-text">Level ${fmtPrice(recentFake.level)} broke, then failed to hold</span>
       <div class="mtf-verdict-detail">Don't chase ${recentFake.direction === "bullish" ? "CE" : "PE"} off this level alone — wait for a fresh break + close + hold/retest before treating it as real.</div>
+      <div class="sig-legend">
+        <div class="sig-legend-row">What happened: the candle CLOSED beyond the level (not just a wick) — that's a real break. But within a few candles, price closed back on the original side before it could hold. Break ≠ confirmation.</div>
+        <div class="sig-legend-row sig-legend-note">This overrides the structure signal above for THIS specific level — even a "BOS" swing built on a fake break isn't trustworthy until a fresh, real break + retest happens.</div>
+      </div>
     </div>` : ""}
     <div class="trend-grid">
       <div title="Sequence of confirmed swing highs/lows on ${tfLabel} candles — HH/HL = higher high/higher low (bullish), LH/LL = lower high/lower low (bearish)"><span class="tg-label">${tfLabel} STRUCTURE</span><span class="tg-val">${(d[`structure_sequence_${tf}`] || []).join(" → ") || "—"}</span></div>
