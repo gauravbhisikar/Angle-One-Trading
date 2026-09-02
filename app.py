@@ -1447,8 +1447,16 @@ def build_trend():
 
     data_status = "stale" if any(stale.values()) else "live"
 
-    if data_status == "live":
-        for tf in TREND_TIMEFRAMES:
+    # Per-timeframe, not gated on the combined data_status: after NSE closes
+    # for the day, "stale" is correct and expected (no new candle is coming
+    # until tomorrow) — but that must never permanently block the FIRST
+    # seed of a freshly-restarted process (e.g. right after a deploy in the
+    # evening) from loading the day's history at all. Bootstrap once
+    # regardless of staleness; ongoing live advancement still respects the
+    # per-tf staleness gate so a genuinely broken/lagging feed during market
+    # hours doesn't get treated as fresh.
+    for tf in TREND_TIMEFRAMES:
+        if not stale[tf] or not _LIVE_TREND_STATE[tf].candles:
             trend_engine.advance_live_trend(_LIVE_TREND_STATE[tf], candles[tf])
 
     snap = {tf: trend_engine.snapshot(_LIVE_TREND_STATE[tf]) for tf in TREND_TIMEFRAMES}
