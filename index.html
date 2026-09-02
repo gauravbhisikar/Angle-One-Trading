@@ -470,6 +470,7 @@
   .legend-line { width: 14px; height: 0; border-top: 1.5px dashed var(--amber); display: inline-block; }
   .legend-line.legend-line-solid { border-top-style: solid; border-top-color: var(--up); }
   .legend-line.legend-line-price { border-top-style: dotted; border-top-color: var(--accent); }
+  .legend-line.legend-line-today { border-top-style: dotted; border-top-color: var(--text); opacity: .6; }
   .bias-verdict { font-size: 19px; font-weight: 700; letter-spacing: .2px; }
   .bias.up   .bias-verdict { color: var(--up); }
   .bias.down .bias-verdict { color: var(--down); }
@@ -1108,6 +1109,7 @@ function trendStatusHTML(d) {
       <span class="legend-item"><span class="legend-dot"></span>Confirmed swing point</span>
       <span class="legend-item"><span class="legend-line legend-line-solid"></span>Trend line (swing lows in an uptrend, swing highs in a downtrend)</span>
       <span class="legend-item"><span class="legend-line"></span>Trend start</span>
+      <span class="legend-item"><span class="legend-line legend-line-today"></span>Today started</span>
       <span class="legend-item"><span class="legend-line legend-line-price"></span>Current price</span>
     </div>
     <div class="bias-note">Rule-based structure analysis — no prediction, no buy/sell signal, recalculated on every closed candle.</div>
@@ -1203,6 +1205,24 @@ function drawTrendChart(canvas, data, tf) {
     ctx.fillStyle = markerCol; ctx.font = "9px " + col("--mono"); ctx.textAlign = "center";
     ctx.fillText("TREND START", sx, marginT + 10);
     ctx.textAlign = "left";
+  }
+
+  // Where today's session begins in the shown candle window — dashboard's
+  // own server-computed IST date (data.generated_at), not the browser's
+  // local timezone, so this can't drift from what the backend considers
+  // "today."
+  const todayStr = (data.generated_at || "").slice(0, 10);
+  if (todayStr) {
+    const todayStartIdx = shown.findIndex(c => (c.date || "").slice(0, 10) === todayStr);
+    if (todayStartIdx > 0) {
+      const sx2 = x(todayStartIdx);
+      ctx.strokeStyle = textCol; ctx.globalAlpha = 0.5; ctx.setLineDash([1, 2]); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(sx2, marginT); ctx.lineTo(sx2, marginT + plotH); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+      ctx.fillStyle = textCol; ctx.font = "9px " + col("--mono"); ctx.textAlign = "center";
+      ctx.fillText("TODAY", sx2, marginT + plotH - 4);
+      ctx.textAlign = "left";
+    }
   }
 
   if (data.current_price != null && data.current_price >= yMin && data.current_price <= yMax) {
