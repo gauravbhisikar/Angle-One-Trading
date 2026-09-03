@@ -333,6 +333,22 @@ def _structure_signal(state):
     if r is None:
         if state.trend == "sideways":
             tail = state.structure_sequence[-4:]
+            last2 = state.structure_sequence[-2:]
+            developing = None
+            if set(last2) == {"HH", "HL"}:
+                developing = "bullish"
+            elif set(last2) == {"LH", "LL"}:
+                developing = "bearish"
+            if developing:
+                # Saying "no established structure" while a real HH+HL (or
+                # LH+LL) pair sits right there in the sequence is too
+                # absolute — name it as a developing-but-not-yet-confirmed
+                # sequence instead (needs 4 in a row, not 2, to flip trend).
+                return {"status": "developing", "label": f"Range — developing {developing} sequence",
+                        "direction": None,
+                        "detail": f"Recent swings ({' → '.join(tail)}) show a developing {developing} pair, "
+                                  f"but it takes 4 confirmed swings in a row to call this a real trend — "
+                                  f"still range/sideways until then."}
             if tail:
                 # Never say "no trend" with no explanation while a real swing
                 # sequence is visible right below it on the UI — that reads as
@@ -686,3 +702,59 @@ def trade_setup_state(mtf, trend_15m, breakouts_15m, breakdowns_15m, retests_15m
     return {"status": "setup_forming", "label": "SETUP FORMING", "why": mtf["detail"],
             "watch_for": f"A real (close-confirmed, held) {direction} breakout/breakdown or retest "
                          f"near the nearest zone before treating this as confirmed."}
+
+
+def market_state(trend, current_price, support, resistance):
+    """Single top-line "where are we" read for the primary (15M) timeframe —
+    names the current price's position relative to the nearest confirmed
+    support/resistance, or the trend if one is established. Never a
+    prediction, just an orientation statement."""
+    if trend in ("bullish", "bearish"):
+        return {"state": trend, "label": trend.upper(),
+                "detail": f"15M structure is {trend} — the baseline read is to favor this direction, "
+                          f"not fight it."}
+    if current_price is not None and support is not None and resistance is not None:
+        return {"state": "range", "label": "RANGE / WAIT",
+                "detail": f"Price ({current_price}) is between support ({support}) and resistance "
+                          f"({resistance}) — no confirmed direction yet."}
+    return {"state": "range", "label": "RANGE / WAIT", "detail": "No confirmed directional structure yet."}
+
+
+def watch_conditions(trend, support, resistance, invalidation):
+    """Explicit bullish/bearish conditions that would change the current
+    read — never a signal, just names the exact levels/events to watch
+    before the setup state can progress past WATCHING."""
+    if trend == "sideways":
+        bullish_cond = f"15M closes above resistance ({resistance})" if resistance is not None \
+            else "15M closes above the nearest resistance zone"
+        bearish_cond = f"15M closes below support ({support})" if support is not None \
+            else "15M closes below the nearest support zone"
+        return {
+            "bullish": {"condition": bullish_cond,
+                        "steps": ["Structure confirmation (BOS / retest holds)", "5M confirmation",
+                                  "Then manually review CE contracts"]},
+            "bearish": {"condition": bearish_cond,
+                        "steps": ["Structure confirmation (BOS / retest holds)", "5M confirmation",
+                                  "Then manually review PE contracts"]},
+        }
+    if trend == "bullish":
+        inv_cond = f"15M closes below the invalidation level ({invalidation})" if invalidation is not None \
+            else "15M closes below the most recent HL"
+        return {
+            "continuation": {"condition": "15M keeps printing HH + HL (BOS)",
+                              "steps": ["5M confirmation", "Then manually review CE contracts"]},
+            "invalidation": {"condition": inv_cond,
+                              "steps": ["Would break the bullish structure (bearish CHoCH watch)",
+                                        "Wait for LH + LL before treating this as bearish"]},
+        }
+    if trend == "bearish":
+        inv_cond = f"15M closes above the invalidation level ({invalidation})" if invalidation is not None \
+            else "15M closes above the most recent LH"
+        return {
+            "continuation": {"condition": "15M keeps printing LH + LL (BOS)",
+                              "steps": ["5M confirmation", "Then manually review PE contracts"]},
+            "invalidation": {"condition": inv_cond,
+                              "steps": ["Would break the bearish structure (bullish CHoCH watch)",
+                                        "Wait for HL + HH before treating this as bullish"]},
+        }
+    return None

@@ -465,6 +465,28 @@
   .bias.down { border-color: color-mix(in srgb, var(--down) 30%, var(--line)); background: var(--down-bg); }
   .bias.flat { border-color: color-mix(in srgb, var(--amber) 30%, var(--line)); background: var(--amber-bg); }
   .bias-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .msc-label {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--faint);
+    font-weight: 700; display: block; margin-bottom: 6px;
+  }
+  .msc-value { font-size: 22px; font-weight: 800; letter-spacing: .5px; }
+  .msc-levels { display: flex; gap: 20px; margin-top: 14px; flex-wrap: wrap; }
+  .msc-level { display: flex; flex-direction: column; gap: 2px; }
+  .msc-level-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: var(--faint); font-weight: 700; }
+  .msc-level-val { font-size: 16px; font-weight: 700; font-family: var(--mono); }
+  .msc-level.up .msc-level-val { color: var(--up); }
+  .msc-level.down .msc-level-val { color: var(--down); }
+  .watch-branches { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 4px; }
+  .watch-branch {
+    border-radius: 10px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface2);
+  }
+  .watch-branch.up   { border-color: color-mix(in srgb, var(--up) 30%, var(--line)); }
+  .watch-branch.down { border-color: color-mix(in srgb, var(--down) 30%, var(--line)); }
+  .watch-branch-title { font-size: 11px; font-weight: 700; letter-spacing: .5px; margin-bottom: 6px; }
+  .watch-branch-cond { font-size: 12.5px; font-weight: 600; margin-bottom: 8px; }
+  .watch-step { font-size: 11px; color: var(--muted); line-height: 1.7; padding-left: 4px; }
+  .watch-otherwise { margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .watch-otherwise b { color: var(--amber); }
   .nifty-now {
     margin-left: auto; font-size: 12px; color: var(--muted); font-family: var(--mono);
     background: var(--surface2); padding: 4px 10px; border-radius: 999px; cursor: default;
@@ -1118,17 +1140,17 @@ function trendStatusHTML(d) {
   const stale_date = !isToday(lastClosedTs);
   const trendStart = d[`trend_start_${currentTrendTf}`];
   const TF_ROLE = {
-    "1h": "Overall market direction",
-    "15m": "Trading direction / setup (primary)",
-    "5m": "Entry timing only",
+    "1h": { tag: "CONTEXT", q: "Is the broader market trending or ranging?" },
+    "15m": { tag: "PRIMARY SETUP", q: "Where is the important structure and level?" },
+    "5m": { tag: "ENTRY TIMING", q: "Has the move actually started?" },
   };
   const tfPill = (t) => {
     const tt = d[`trend_${t}`] || "sideways";
     const tcls = tt === "bullish" ? "up" : tt === "bearish" ? "down" : "flat";
     const temoji = tt === "bullish" ? "🟢" : tt === "bearish" ? "🔴" : "🟡";
     return `<div class="mtf-card ${tcls} ${t === tf ? "mtf-active" : ""}" data-tf="${t}" title="Click to switch the structure/events detail panel below to ${t.toUpperCase()} — the three charts always show all timeframes at once">
-      <div class="mtf-card-tf">${t.toUpperCase()}</div>
-      <div class="mtf-card-role">${TF_ROLE[t]}</div>
+      <div class="mtf-card-tf">${t.toUpperCase()} · ${TF_ROLE[t].tag}</div>
+      <div class="mtf-card-role">${TF_ROLE[t].q}</div>
       <div class="mtf-card-val">${temoji} ${esc(tt.toUpperCase())}</div>
     </div>`;
   };
@@ -1180,7 +1202,59 @@ function trendStatusHTML(d) {
     </div>`;
   };
 
+  const marketStateHTML = () => {
+    const ms = d.market_state;
+    if (!ms) return "";
+    const msCls = ms.state === "bullish" ? "up" : ms.state === "bearish" ? "down" : "flat";
+    const sup15 = d.nearest_support_15m, res15 = d.nearest_resistance_15m;
+    return `
+    <div class="bias ${msCls} market-state-card">
+      <div class="msc-label">CURRENT MARKET STATE (15M primary)</div>
+      <div class="msc-value">${esc(ms.label)}</div>
+      <div class="bias-note">${esc(ms.detail)}</div>
+      <div class="msc-levels">
+        ${res15 != null ? `<div class="msc-level down"><span class="msc-level-tag">RESISTANCE</span><span class="msc-level-val">${fmtPrice(res15)}</span></div>` : ""}
+        ${d.current_price != null ? `<div class="msc-level"><span class="msc-level-tag">CURRENT</span><span class="msc-level-val">${fmtPrice(d.current_price)}</span></div>` : ""}
+        ${sup15 != null ? `<div class="msc-level up"><span class="msc-level-tag">SUPPORT</span><span class="msc-level-val">${fmtPrice(sup15)}</span></div>` : ""}
+      </div>
+    </div>`;
+  };
+
+  const watchHTML = () => {
+    const wc = d.watch_conditions;
+    if (!wc) return "";
+    const branch = (cls, title, b) => !b ? "" : `
+      <div class="watch-branch ${cls}">
+        <div class="watch-branch-title">${title}</div>
+        <div class="watch-branch-cond">${esc(b.condition)}</div>
+        <div class="watch-branch-steps">${b.steps.map(s => `<div class="watch-step">→ ${esc(s)}</div>`).join("")}</div>
+      </div>`;
+    if (wc.bullish && wc.bearish) {
+      return `
+      <div class="bias flat watch-card">
+        <div class="msc-label">WHAT TO WATCH (15M)</div>
+        <div class="watch-branches">
+          ${branch("up", "🟢 BULLISH SCENARIO", wc.bullish)}
+          ${branch("down", "🔴 BEARISH SCENARIO", wc.bearish)}
+        </div>
+        <div class="watch-otherwise">Otherwise: <b>WAIT.</b> Don't chase price in the middle of the range.</div>
+      </div>`;
+    }
+    const t15 = d.trend_15m;
+    const contCls = t15 === "bullish" ? "up" : t15 === "bearish" ? "down" : "flat";
+    const invCls = t15 === "bullish" ? "down" : "up";
+    return `
+    <div class="bias flat watch-card">
+      <div class="msc-label">WHAT TO WATCH (15M)</div>
+      <div class="watch-branches">
+        ${branch(contCls, "CONTINUATION", wc.continuation)}
+        ${branch(invCls, "INVALIDATION", wc.invalidation)}
+      </div>
+    </div>`;
+  };
+
   const whatChangesHTML = () => {
+    if (tf === "15m") return ""; // superseded by the WHAT TO WATCH card above, which uses the same 15M data
     const trendTf = d[`trend_${tf}`] || "sideways";
     const sup = d[`nearest_support_${tf}`], res = d[`nearest_resistance_${tf}`], inv = d[`invalidation_level_${tf}`];
     if (trendTf === "sideways") {
@@ -1210,6 +1284,8 @@ function trendStatusHTML(d) {
 
   return `
   ${staleBanner}
+  ${marketStateHTML()}
+  ${watchHTML()}
   <div class="bias trend-status ${cls}">
     <div class="bias-head">
       <span class="bias-verdict">${emoji} TREND (${tfLabel}): ${esc(label)}</span>
@@ -1366,7 +1442,7 @@ function drawTrendChart(canvas, data, tf, cssH = 420) {
     // genuinely no trendline to draw here — say so explicitly instead of
     // silently showing nothing (which reads as a missing feature/bug).
     ctx.fillStyle = amberCol; ctx.font = "10px " + col("--mono"); ctx.textAlign = "center";
-    ctx.fillText(`No trendline — ${tf.toUpperCase()} structure is sideways right now`, marginL + plotW / 2, marginT + 14);
+    ctx.fillText(`STRUCTURE: RANGE  ·  TRENDLINE: NONE — no valid directional structure yet`, marginL + plotW / 2, marginT + 14);
     ctx.textAlign = "left";
   }
 
