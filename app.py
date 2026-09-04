@@ -363,7 +363,12 @@ def openrouter_expected_trend(checks, news_sentiment):
         "{\n"
         '  "expected_trend": "bullish|bearish|neutral",\n'
         '  "confidence": "low|medium|high",\n'
-        '  "why": ["<short bullet, e.g. \'Asia: Negative\'>", "..."],\n'
+        '  "reasoning_summary": "<2-3 sentences: WHY this overall verdict, given the mix of factors below — '
+        'name which factors you weighted most heavily and why, especially if some individual factors point '
+        "the other way (example shape: Despite negative Asia and crude, the GIFT NIFTY gap-up and a strong "
+        'US session are more directly predictive of the NIFTY open, outweighing the softer macro backdrop.)>",\n'
+        '  "why": [{"factor": "<e.g. \'GIFT NIFTY\'>", "sentiment": "positive|negative|neutral", '
+        '"detail": "<short factual detail, e.g. \'gap-up vs prev close\'>"}, "<...one object per factor you used>"],\n'
         '  "expected_opening": "<1 sentence on where NIFTY likely opens vs prev close, from GIFT>",\n'
         '  "bullish_scenario": "<1-2 sentences: IF price does X relative to the key levels above, '
         'THEN bullish hypothesis confirmed>",\n'

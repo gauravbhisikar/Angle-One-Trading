@@ -603,6 +603,10 @@
     margin-top: 10px; padding: 10px 14px; border-radius: 10px; font-size: 12px; line-height: 1.6;
     border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); background: var(--accent-bg); color: var(--text);
   }
+  .ai-summary {
+    margin-top: 12px; padding: 12px 14px; border-radius: 10px; font-size: 13px; line-height: 1.6;
+    font-weight: 500; border: 1px solid var(--line); background: var(--surface2); color: var(--text);
+  }
   .ai-block { margin-top: 14px; }
   .ai-block-label {
     font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px;
@@ -1098,7 +1102,16 @@ function aiTrendHTML(trend, generatedAt, marketOpen) {
   if (!trend) return "";
   const cls = trend.expected_trend === "bullish" ? "up"
     : trend.expected_trend === "bearish" ? "down" : "flat";
-  const why = (trend.why || []).map(w => `<div class="bias-reason ${cls}"><span class="bdot"></span>${esc(w)}</div>`).join("");
+  // Each factor gets ITS OWN color from its own sentiment, not a blanket
+  // color tied to the overall verdict — a negative Asia/crude reading must
+  // not render green just because the overall hypothesis is bullish; that
+  // misrepresents the AI's own analysis as more one-sided than it is.
+  const SENT_CLS = { positive: "up", negative: "down", neutral: "flat" };
+  const why = (trend.why || []).map(w => {
+    if (typeof w === "string") return `<div class="bias-reason ${cls}"><span class="bdot"></span>${esc(w)}</div>`; // old cached shape, pre-fix
+    const wcls = SENT_CLS[w.sentiment] || "flat";
+    return `<div class="bias-reason ${wcls}"><span class="bdot"></span><b>${esc(w.factor || "")}</b>${w.detail ? `: ${esc(w.detail)}` : ""}</div>`;
+  }).join("");
   const watch = (trend.watch_after_open || []).map((w, i) => `<li>${esc(w)}</li>`).join("");
 
   // Once NSE is open, "expected opening"/pre-open scenarios are stale by
@@ -1120,7 +1133,9 @@ function aiTrendHTML(trend, generatedAt, marketOpen) {
     <div class="ai-generated-at" title="This hypothesis regenerates every ~5 minutes — the numbers it references (e.g. GIFT NIFTY) were live AT THAT TIME, and may already differ from the live cards above, which refresh every 10s">Based on data as of ${esc(generatedAt || "—")} IST — may lag the live cards above by up to ~5 min</div>
     ${openNotice}
 
-    ${why ? `<div class="bias-why">Why (as of pre-open)</div><div class="bias-reasons">${why}</div>` : ""}
+    ${trend.reasoning_summary ? `<div class="ai-summary">${esc(trend.reasoning_summary)}</div>` : ""}
+
+    ${why ? `<div class="bias-why">Factors (as of pre-open)</div><div class="bias-reasons">${why}</div>` : ""}
 
     ${(!marketOpen && trend.expected_opening) ? `<div class="ai-block"><span class="ai-block-label">Expected opening</span>
       <div class="ai-block-body">${esc(trend.expected_opening)}</div></div>` : ""}
