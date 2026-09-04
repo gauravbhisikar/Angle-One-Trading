@@ -1157,7 +1157,7 @@ function newsItemHTML(it) {
     ${it.reason ? `<div class="creason">${esc(it.reason)}</div>` : ""}
     <div class="ctop news-foot">
       <span class="csrc">${esc(it.source)}</span>
-      <span class="cupdated">${it.ts ? new Date(it.ts * 1000).toLocaleString("en-IN") : ""}</span>
+      <span class="cupdated">${it.ts ? new Date(it.ts * 1000).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) : ""}</span>
     </div>
   </div>`;
 }
