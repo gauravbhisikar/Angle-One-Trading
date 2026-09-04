@@ -506,6 +506,21 @@
   .prog-step { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--faint); font-weight: 600; }
   .prog-step.done { color: var(--muted); }
   .prog-step.current { color: var(--amber); }
+  .prog-warning { color: var(--down); font-weight: 700; font-size: 12px; }
+  .msc-next-action {
+    margin-top: 12px; padding: 10px 14px; border-radius: 10px; font-size: 13px; line-height: 1.5;
+    border: 1px solid var(--line); background: var(--surface2);
+  }
+  .msc-next-action b { letter-spacing: .3px; }
+  .msc-next-action.up   { border-color: color-mix(in srgb, var(--up) 35%, var(--line));   background: var(--up-bg); }
+  .msc-next-action.down { border-color: color-mix(in srgb, var(--down) 35%, var(--line)); background: var(--down-bg); }
+  .risk-row { display: flex; gap: 22px; flex-wrap: wrap; margin: 10px 0 4px; }
+  .risk-item { display: flex; flex-direction: column; gap: 3px; }
+  .risk-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: var(--faint); font-weight: 700; }
+  .risk-val { font-size: 15px; font-weight: 700; font-family: var(--mono); }
+  .risk-item.up .risk-val { color: var(--up); }
+  .risk-item.down .risk-val { color: var(--down); }
+  .risk-val.flat { color: var(--amber); }
   .prog-mark { font-size: 11px; }
   .msc-levels { display: flex; gap: 20px; margin-top: 14px; flex-wrap: wrap; }
   .msc-level { display: flex; flex-direction: column; gap: 2px; }
@@ -1317,16 +1332,37 @@ function trendStatusHTML(d) {
 
   const BIAS_EMOJI = { bullish: "🟢", bearish: "🔴", neutral: "⚪" };
   const SETUP_LABEL = {
-    wait: "WAIT", watching: "WATCHING", setup_forming: "SETUP FORMING",
-    structure_confirmed: "CONFIRMED — REVIEW OPTIONS",
+    wait: "🟡 WAIT", watching: "🟡 WATCHING", setup_forming: "🟡 SETUP FORMING",
+    structure_confirmed: "✅ CONFIRMED — REVIEW OPTIONS",
+    invalidated: "⚠️ SETUP INVALIDATED", data_unreliable: "⚠️ DATA UNRELIABLE — WAIT",
+  };
+  // The one workflow rule this dashboard follows end to end: WAIT means
+  // don't trade; CONFIRMED means the direction side (CE/PE) is worth
+  // reviewing manually; nothing else is ever a buy/sell instruction.
+  const NEXT_ACTION = {
+    wait: "Don't trade — no usable setup yet.",
+    watching: "Don't trade yet — direction is forming, wait for 5M/structure confirmation.",
+    setup_forming: "Don't trade yet — a break happened but hasn't been confirmed as real.",
+    structure_confirmed: bias => `Go to the ${bias === "bullish" ? "CE" : "PE"} side — review contracts manually, this is not a buy signal.`,
+    invalidated: "Cancel/ignore the previous read — don't act on it. Wait for a fresh confirmation.",
+    data_unreliable: "Don't trade — candle data is stale, nothing here can be trusted right now.",
   };
   const marketStateHTML = () => {
     const ms = d.market_state;
     if (!ms) return "";
-    const msCls = ms.state === "bullish" ? "up" : ms.state === "bearish" ? "down" : "flat";
-    const sup15 = d.nearest_support_15m, res15 = d.nearest_resistance_15m;
-    const pt = d.primary_trend, bias = d.directional_bias, setup = d.setup_state;
+    const setup = d.setup_state;
+    const pt = d.primary_trend, bias = d.directional_bias;
     const biasEmoji = BIAS_EMOJI[bias] || "⚪";
+    // Card color follows the workflow state, not just the raw market
+    // state — an invalidated/unreliable read must look like a warning
+    // even if the underlying trend still reads bullish/bearish.
+    const msCls = (setup && (setup.status === "invalidated" || setup.status === "data_unreliable")) ? "down"
+      : ms.state === "bullish" ? "up" : ms.state === "bearish" ? "down" : "flat";
+    const sup15 = d.nearest_support_15m, res15 = d.nearest_resistance_15m;
+    const nextActionRaw = setup ? (NEXT_ACTION[setup.status] || "") : "";
+    const nextAction = typeof nextActionRaw === "function" ? nextActionRaw(bias) : nextActionRaw;
+    const naCls = setup && setup.status === "structure_confirmed" ? (bias === "bullish" ? "up" : "down")
+      : (setup && (setup.status === "invalidated" || setup.status === "data_unreliable")) ? "down" : "flat";
     return `
     <div class="bias ${msCls} market-state-card">
       <div class="msc-label">CURRENT MARKET STATE (15M primary)</div>
@@ -1337,11 +1373,32 @@ function trendStatusHTML(d) {
         ${bias ? `<div class="msc-tier"><span class="msc-tier-tag">DIRECTIONAL BIAS</span><span class="msc-tier-val">${biasEmoji} ${esc(bias.toUpperCase())}</span></div>` : ""}
         ${setup ? `<div class="msc-tier"><span class="msc-tier-tag">TRADE STATE</span><span class="msc-tier-val">${esc(SETUP_LABEL[setup.status] || setup.label)}</span></div>` : ""}
       </div>
+      ${nextAction ? `<div class="msc-next-action ${naCls}"><b>NEXT ACTION:</b> ${esc(nextAction)}</div>` : ""}
       <div class="msc-levels">
         ${res15 != null ? `<div class="msc-level down"><span class="msc-level-tag">RESISTANCE</span><span class="msc-level-val">${fmtPrice(res15)}</span></div>` : ""}
         ${d.current_price != null ? `<div class="msc-level"><span class="msc-level-tag">CURRENT</span><span class="msc-level-val">${fmtPrice(d.current_price)}</span></div>` : ""}
         ${sup15 != null ? `<div class="msc-level up"><span class="msc-level-tag">SUPPORT</span><span class="msc-level-val">${fmtPrice(sup15)}</span></div>` : ""}
       </div>
+    </div>`;
+  };
+
+  const riskLevelsHTML = () => {
+    const rl = d.risk_levels;
+    if (!rl) return "";
+    const bias = d.directional_bias;
+    const rrCls = rl.risk_reward != null ? (rl.risk_reward >= 1.5 ? "up" : rl.risk_reward >= 1 ? "flat" : "down") : "flat";
+    return `
+    <div class="bias flat risk-card">
+      <div class="msc-label">RISK REFERENCE (price levels only — not position sizing)</div>
+      <div class="risk-row">
+        <div class="risk-item"><span class="risk-tag">ENTRY REF</span><span class="risk-val">${fmtPrice(rl.entry_ref)}</span></div>
+        <div class="risk-item down"><span class="risk-tag">STOP / INVALIDATION</span><span class="risk-val">${rl.stop_level != null ? fmtPrice(rl.stop_level) : "—"}</span></div>
+        <div class="risk-item up"><span class="risk-tag">TARGET</span><span class="risk-val">${rl.target_level != null ? fmtPrice(rl.target_level) : "—"}</span></div>
+        <div class="risk-item"><span class="risk-tag">RISK : REWARD</span><span class="risk-val ${rrCls}">${rl.risk_reward != null ? `1 : ${rl.risk_reward}` : "—"}</span></div>
+      </div>
+      <div class="bias-note">Risk ${rl.risk_points != null ? fmtPrice(rl.risk_points) : "—"} pts · Reward ${rl.reward_points != null ? fmtPrice(rl.reward_points) : "—"} pts —
+      from already-computed support/resistance/invalidation levels, for a ${bias} setup. Position size and ₹ risk are
+      yours to decide based on your own capital — this dashboard has no visibility into that.</div>
     </div>`;
   };
 
@@ -1353,6 +1410,11 @@ function trendStatusHTML(d) {
     const hasPrimary = t15 && t15 !== "sideways";
     const hasLevel = d.nearest_support_15m != null && d.nearest_resistance_15m != null;
     const order = ["wait", "watching", "setup_forming", "structure_confirmed"];
+    // invalidated/data_unreliable aren't points ON the funnel — they're a
+    // warning override, shown as their own row instead of faking a step index.
+    if (setup.status === "invalidated" || setup.status === "data_unreliable") {
+      return `<div class="progression-row prog-warning">⚠️ ${esc(setup.label)} — the funnel below doesn't apply until this clears</div>`;
+    }
     const idx = order.indexOf(setup.status);
     const steps = [
       { label: "CONTEXT (1H)", done: hasContext },
@@ -1439,6 +1501,7 @@ function trendStatusHTML(d) {
   ${marketStateHTML()}
   ${progressionHTML()}
   ${watchHTML()}
+  ${riskLevelsHTML()}
   <div class="bias trend-status ${cls}">
     <div class="bias-head">
       <span class="bias-verdict">${emoji} TREND (${tfLabel}): ${esc(label)}</span>

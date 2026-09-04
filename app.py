@@ -1559,13 +1559,18 @@ def build_trend():
     out["mtf_read"] = trend_engine.multi_timeframe_read(out["trend_1h"], out["trend_15m"], out["trend_5m"])
     out["setup_state"] = trend_engine.trade_setup_state(
         out["mtf_read"], out["trend_15m"], out["breakouts_15m"], out["breakdowns_15m"],
-        out["retests_15m"], out["fake_breakouts_15m"], len(out["candles_15m"]) - 1)
+        out["retests_15m"], out["fake_breakouts_15m"], out["choch_events_15m"],
+        len(out["candles_15m"]) - 1, data_status=data_status)
     out["market_state"] = trend_engine.market_state(
         out["trend_15m"], current_price, out["nearest_support_15m"], out["nearest_resistance_15m"])
     out["watch_conditions"] = trend_engine.watch_conditions(
         out["trend_15m"], out["nearest_support_15m"], out["nearest_resistance_15m"], out["invalidation_level_15m"])
     out["primary_trend"] = trend_engine.primary_trend_label(out["trend_15m"], out["structure_signal_15m"])
     out["directional_bias"] = trend_engine.directional_bias(out["trend_15m"], out["primary_trend"])
+    out["risk_levels"] = (trend_engine.risk_levels(
+        out["directional_bias"], current_price, out["nearest_support_15m"],
+        out["nearest_resistance_15m"], out["invalidation_level_15m"])
+        if out["setup_state"]["status"] == "structure_confirmed" else None)
     return out
 
 
@@ -1848,7 +1853,7 @@ class Handler(BaseHTTPRequestHandler):
                     snap = {"error": str(exc), "data_status": "stale", "current_price": None,
                             "reversal": None, "config": {}, "mtf_read": None, "setup_state": None,
                             "market_state": None, "watch_conditions": None,
-                            "primary_trend": None, "directional_bias": None,
+                            "primary_trend": None, "directional_bias": None, "risk_levels": None,
                             "nearest_support": None, "nearest_resistance": None, "invalidation_level": None,
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
                     for tf in TREND_TIMEFRAMES:

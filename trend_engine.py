@@ -646,12 +646,20 @@ def multi_timeframe_read(trend_1h, trend_15m, trend_5m):
 
 
 def trade_setup_state(mtf, trend_15m, breakouts_15m, breakdowns_15m, retests_15m,
-                       fake_breakouts_15m, now_i, window=6):
-    """Deterministic WAIT / WATCHING / SETUP FORMING / STRUCTURE CONFIRMED —
-    where you are in the manual decision funnel (1H context -> 15M direction
-    -> 5M timing -> confirmation), never a buy/sell instruction. Built
-    entirely from multi_timeframe_read()'s output plus recent 15M
-    breakout/retest/fake-breakout events — no new inputs, no AI."""
+                       fake_breakouts_15m, choch_events_15m, now_i, data_status="live", window=6):
+    """Deterministic WAIT / WATCHING / SETUP FORMING / STRUCTURE CONFIRMED /
+    INVALIDATED / DATA UNRELIABLE — where you are in the manual decision
+    funnel (1H context -> 15M direction -> 5M timing -> confirmation),
+    never a buy/sell instruction. Built entirely from multi_timeframe_read()'s
+    output plus recent 15M breakout/retest/fake-breakout/CHoCH events — no
+    new inputs, no AI."""
+    if data_status == "stale":
+        # A confident-looking trade state built on stale candle data is
+        # worse than no state at all — this must outrank every other check.
+        return {"status": "data_unreliable", "label": "DATA UNRELIABLE — WAIT",
+                "why": "Candle data hasn't updated recently — trade-state evaluation is paused until "
+                       "fresh data arrives, regardless of what the last-known structure looked like.",
+                "watch_for": "Fresh live candle data before trusting any direction read."}
     if not mtf:
         return {"status": "wait", "label": "WAIT", "why": "No read available yet.", "watch_for": ""}
     action = mtf["action"]
@@ -695,15 +703,29 @@ def trade_setup_state(mtf, trend_15m, breakouts_15m, breakdowns_15m, retests_15m
                        f"one (level {fake['level']} broke, then failed to hold) — no real confirmation yet.",
                 "watch_for": "A fresh break + close + hold/retest before treating this as confirmed."}
 
-    if retest_ev:
+    confirming_ev = retest_ev or breakout_ev
+    if confirming_ev:
+        # A structure was confirmed, but has anything broken it SINCE that
+        # confirmation? A CHoCH in the opposite direction, fired after the
+        # candle that confirmed this setup, means the old confirmed read is
+        # no longer trustworthy — must be surfaced loudly, not silently left
+        # showing a now-stale "CONFIRMED" badge.
+        opposite = "bearish" if direction == "bullish" else "bullish"
+        invalidating_choch = next(
+            (c for c in reversed(choch_events_15m or [])
+             if c.get("direction") == opposite and c.get("i", -10**9) > confirming_ev["i"]), None)
+        if invalidating_choch:
+            return {"status": "invalidated", "label": "SETUP INVALIDATED",
+                    "why": f"Structure was confirmed {direction}, but a {opposite} CHoCH fired afterward "
+                           f"at {invalidating_choch['price']} (broke through {invalidating_choch['trigger_level']}) "
+                           f"— don't act on the previous {direction} read anymore.",
+                    "watch_for": f"A fresh {direction} confirmation, or the market establishing the new "
+                                 f"{opposite} direction instead."}
+        confirm_kind = "retest" if retest_ev else ("breakout" if direction == "bullish" else "breakdown")
+        confirm_price = confirming_ev.get("zone_mid", confirming_ev.get("price"))
         return {"status": "structure_confirmed", "label": "STRUCTURE CONFIRMED",
-                "why": f"15M and 5M both {direction}, and a {direction} retest just confirmed "
-                       f"(held at {retest_ev['zone_mid']}).",
-                "watch_for": "Manually reviewing the option chain is now reasonable — still your decision."}
-    if breakout_ev:
-        return {"status": "structure_confirmed", "label": "STRUCTURE CONFIRMED",
-                "why": f"15M and 5M both {direction}, backed by a real {direction} "
-                       f"{'breakout' if direction == 'bullish' else 'breakdown'} at {breakout_ev['price']}.",
+                "why": f"15M and 5M both {direction}, backed by a real {direction} {confirm_kind} "
+                       f"at {confirm_price}.",
                 "watch_for": "Manually reviewing the option chain is now reasonable — still your decision."}
 
     return {"status": "setup_forming", "label": "SETUP FORMING", "why": mtf["detail"],
@@ -790,3 +812,29 @@ def watch_conditions(trend, support, resistance, invalidation):
                                         "Wait for HL + HH before treating this as bullish"]},
         }
     return None
+
+
+def risk_levels(direction, current_price, support, resistance, invalidation):
+    """Deterministic PRICE-LEVEL risk reference — entry/stop/target/R:R
+    built from levels already computed elsewhere. Never position sizing
+    (that needs the user's own capital/risk tolerance, which this system
+    doesn't have and shouldn't guess) — just the price levels a manual risk
+    plan would be built from. Only meaningful once direction is bullish or
+    bearish; NEUTRAL/no-direction returns None."""
+    if direction not in ("bullish", "bearish") or current_price is None:
+        return None
+    if direction == "bullish":
+        stop = invalidation if invalidation is not None else support
+        target = resistance
+    else:
+        stop = invalidation if invalidation is not None else resistance
+        target = support
+    if stop is None or target is None:
+        return {"entry_ref": current_price, "stop_level": stop, "target_level": target,
+                "risk_points": None, "reward_points": None, "risk_reward": None}
+    risk_points = abs(current_price - stop)
+    reward_points = abs(target - current_price)
+    rr = round(reward_points / risk_points, 2) if risk_points else None
+    return {"entry_ref": current_price, "stop_level": stop, "target_level": target,
+            "risk_points": round(risk_points, 2), "reward_points": round(reward_points, 2),
+            "risk_reward": rr}
