@@ -577,6 +577,10 @@
   .ai-trend { border-left: 3px solid var(--accent); }
   .ai-trend .ai-summary { font-size: 12.5px; color: var(--text); font-style: normal; line-height: 1.5; }
   .ai-generated-at { font-size: 10.5px; color: var(--faint); font-family: var(--mono); margin-top: 6px; }
+  .ai-open-notice {
+    margin-top: 10px; padding: 10px 14px; border-radius: 10px; font-size: 12px; line-height: 1.6;
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); background: var(--accent-bg); color: var(--text);
+  }
   .ai-block { margin-top: 14px; }
   .ai-block-label {
     font-size: 9px; text-transform: uppercase; letter-spacing: 1.2px;
@@ -908,7 +912,7 @@ function renderBanner(mkt) {
   b.style.display = "flex";
 }
 
-function renderSummary(checks) {
+function renderSummary(checks, marketOpen) {
   // chk_nifty (support/resistance) is never a directional signal — it's
   // shown as its own wide ladder card, not one of the grid cards a user
   // would count by eye, so it must not silently inflate the tally either
@@ -923,10 +927,16 @@ function renderSummary(checks) {
      <span class="schip mid">◆ ${mid} neutral</span>
      <span class="schip bad">▼ ${bad} caution</span>`;
 
+  // A one-signal lead (e.g. 4 vs 3) is not a meaningful majority — treating
+  // it as a confident directional call overstates what an equal-weighted
+  // count of unrelated inputs (crude, VIX, news, FX...) can actually say.
+  // Require a real margin, and drop the BULLISH/BEARISH wording entirely —
+  // this is pre-market CONTEXT, not an intraday trend call (that's the
+  // Trend tab's job, from real price structure, once the market is open).
   let label, cls;
-  if (bad > good && bad >= 3) { label = "CAUTIOUS / BEARISH"; cls = "down"; }
-  else if (good > bad && good >= 3) { label = "CONSTRUCTIVE / BULLISH"; cls = "up"; }
-  else { label = "MIXED / NEUTRAL"; cls = "flat"; }
+  if (bad - good >= 2) { label = "CAUTIOUS"; cls = "down"; }
+  else if (good - bad >= 2) { label = "CONSTRUCTIVE"; cls = "up"; }
+  else { label = "MIXED"; cls = "flat"; }
 
 const RANK = { down: 0, up: 1, flat: 2 };
   const reasons = signals
@@ -939,12 +949,15 @@ const RANK = { down: 0, up: 1, flat: 2 };
   document.getElementById("bias").innerHTML = `
     <div class="bias ${cls}">
       <div class="bias-head">
-        <span class="bias-verdict">PRE-MARKET BIAS: ${label}</span>
-        <span class="bias-counts">${good} bullish · ${mid} neutral · ${bad} bearish</span>
+        <span class="bias-verdict">PRE-MARKET CONTEXT: ${label}</span>
+        <span class="bias-counts">${good} positive · ${mid} neutral · ${bad} adverse</span>
       </div>
-      <div class="bias-why">Driving the verdict</div>
+      <div class="bias-why">Driving the read</div>
       <div class="bias-reasons">${reasons || '<div class="bias-reason flat"><span class="bdot"></span>No strong signals either way</div>'}</div>
-      <div class="bias-note">Rule-based pre-market checks, not a prediction of the whole trading day.</div>
+      <div class="bias-note">Rule-based pre-market checks (GIFT, global markets, VIX, FX, crude, news) — an
+      equal-weighted count of unrelated inputs, not a NIFTY trend call. ${marketOpen
+        ? "Market is OPEN — this reflects pre-open conditions only; the Trend tab's real intraday price structure is the current, primary verdict now."
+        : "Not a prediction of the whole trading day; once the market opens, actual price structure (Trend tab) takes priority over this."}</div>
     </div>`;
 }
 
@@ -997,9 +1010,9 @@ async function load() {
     const gridChecks = checks.filter(c => c.id !== "chk_nifty");
     document.getElementById("checks").innerHTML = gridChecks.map(checkCardHTML).join("");
     document.getElementById("tabCountA").textContent = checks.length;
-    renderSummary(checks);
+    renderSummary(checks, d.market.open);
 
-    document.getElementById("aiTrend").innerHTML = newsData ? aiTrendHTML(newsData.trend, newsData.generated_at) : "";
+    document.getElementById("aiTrend").innerHTML = newsData ? aiTrendHTML(newsData.trend, newsData.generated_at, d.market.open) : "";
 
     if (newsData) {
       newsLoaded = true;
@@ -1050,25 +1063,38 @@ function newsSentimentHTML(s, method, generatedAt, totalFetched) {
   </div>`;
 }
 
-function aiTrendHTML(trend, generatedAt) {
+function aiTrendHTML(trend, generatedAt, marketOpen) {
   if (!trend) return "";
   const cls = trend.expected_trend === "bullish" ? "up"
     : trend.expected_trend === "bearish" ? "down" : "flat";
   const why = (trend.why || []).map(w => `<div class="bias-reason ${cls}"><span class="bdot"></span>${esc(w)}</div>`).join("");
   const watch = (trend.watch_after_open || []).map((w, i) => `<li>${esc(w)}</li>`).join("");
+
+  // Once NSE is open, "expected opening"/pre-open scenarios are stale by
+  // definition (they describe a moment that already happened) and actual
+  // intraday price structure — the Trend tab's deterministic engine, never
+  // this AI card — is what should drive any decision from here on. Never
+  // let a pre-market forecast keep reading as if it were still live.
+  const openNotice = marketOpen ? `
+    <div class="ai-open-notice">📈 MARKET NOW OPEN — this hypothesis is pre-open context only, frozen at
+      generation time. It never feeds the Trend tab's structure engine. For what's actually happening
+      right now, use the Trend tab — real closed-candle price action always overrides this.</div>` : "";
+
   return `
   <div class="bias ai-trend ${cls}">
     <div class="bias-head">
-      <span class="bias-verdict">🤖 AI HYPOTHESIS: ${esc((trend.expected_trend || "").toUpperCase())}</span>
+      <span class="bias-verdict">🤖 AI HYPOTHESIS (pre-market context — not used by any trade logic): ${esc((trend.expected_trend || "").toUpperCase())}</span>
       <span class="bias-counts">confidence: ${esc(trend.confidence || "—")}</span>
     </div>
     <div class="ai-generated-at" title="This hypothesis regenerates every ~5 minutes — the numbers it references (e.g. GIFT NIFTY) were live AT THAT TIME, and may already differ from the live cards above, which refresh every 10s">Based on data as of ${esc(generatedAt || "—")} IST — may lag the live cards above by up to ~5 min</div>
+    ${openNotice}
 
-    ${why ? `<div class="bias-why">Why</div><div class="bias-reasons">${why}</div>` : ""}
+    ${why ? `<div class="bias-why">Why (as of pre-open)</div><div class="bias-reasons">${why}</div>` : ""}
 
-    ${trend.expected_opening ? `<div class="ai-block"><span class="ai-block-label">Expected opening</span>
+    ${(!marketOpen && trend.expected_opening) ? `<div class="ai-block"><span class="ai-block-label">Expected opening</span>
       <div class="ai-block-body">${esc(trend.expected_opening)}</div></div>` : ""}
 
+    ${!marketOpen ? `
     <div class="ai-scenarios">
       <div class="ai-scenario up"><span class="ai-scenario-label">▲ Bullish scenario</span>
         <div class="ai-block-body">${esc(trend.bullish_scenario || "")}</div></div>
@@ -1077,12 +1103,13 @@ function aiTrendHTML(trend, generatedAt) {
       <div class="ai-scenario down"><span class="ai-scenario-label">▼ Bearish scenario</span>
         <div class="ai-block-body">${esc(trend.bearish_scenario || "")}</div></div>
     </div>
-
     ${watch ? `<div class="ai-block"><span class="ai-block-label">What to watch after 9:15</span>
       <ol class="ai-watchlist">${watch}</ol></div>` : ""}
+    ` : ""}
 
     <div class="bias-note">${esc(trend.conclusion || "This is only a starting hypothesis — confirmation required from actual price action, do not trade purely from pre-market bias.")}
-      The rule-based PRE-MARKET BIAS above remains the primary, auditable verdict.</div>
+      The rule-based PRE-MARKET BIAS above remains the primary, auditable pre-open verdict; the Trend tab
+      is the primary intraday verdict once the market is open.</div>
   </div>`;
 }
 
