@@ -1500,6 +1500,8 @@ def build_trend():
         out["trend_15m"], current_price, out["nearest_support_15m"], out["nearest_resistance_15m"])
     out["watch_conditions"] = trend_engine.watch_conditions(
         out["trend_15m"], out["nearest_support_15m"], out["nearest_resistance_15m"], out["invalidation_level_15m"])
+    out["primary_trend"] = trend_engine.primary_trend_label(out["trend_15m"], out["structure_signal_15m"])
+    out["directional_bias"] = trend_engine.directional_bias(out["trend_15m"], out["primary_trend"])
     return out
 
 
@@ -1606,6 +1608,8 @@ def build_option_chain():
         trend_snap = CACHE.get("trend") or {}
     current_trend = trend_snap.get("trend_15m")
     chain_read = option_chain.chain_vs_trend(current_trend, summary["pcr_read"])
+    setup_state = trend_snap.get("setup_state") or {}
+    directional_bias = trend_snap.get("directional_bias")
 
     return {
         "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1613,6 +1617,7 @@ def build_option_chain():
         "dte": dte, "atm": atm, "lot_size": lot_size, "rows": rows, "pcr": pcr, "max_pain": max_pain,
         "levels": levels, "strikes_info": strikes_info, "summary": summary,
         "shortlist": shortlist, "current_trend": current_trend, "chain_vs_trend": chain_read,
+        "trade_setup_status": setup_state.get("status"), "directional_bias": directional_bias,
     }
 
 
@@ -1779,6 +1784,7 @@ class Handler(BaseHTTPRequestHandler):
                     snap = {"error": str(exc), "data_status": "stale", "current_price": None,
                             "reversal": None, "config": {}, "mtf_read": None, "setup_state": None,
                             "market_state": None, "watch_conditions": None,
+                            "primary_trend": None, "directional_bias": None,
                             "nearest_support": None, "nearest_resistance": None, "invalidation_level": None,
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
                     for tf in TREND_TIMEFRAMES:
@@ -1809,6 +1815,7 @@ class Handler(BaseHTTPRequestHandler):
                             "summary": {"note": "Option-chain data alone is not a trade signal."},
                             "shortlist": {"bullish": [], "bearish": []},
                             "current_trend": None, "chain_vs_trend": None,
+                            "trade_setup_status": None, "directional_bias": None,
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
             body = json.dumps(snap).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")

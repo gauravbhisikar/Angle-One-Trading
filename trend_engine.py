@@ -345,7 +345,7 @@ def _structure_signal(state):
                 # absolute — name it as a developing-but-not-yet-confirmed
                 # sequence instead (needs 4 in a row, not 2, to flip trend).
                 return {"status": "developing", "label": f"Range — developing {developing} sequence",
-                        "direction": None,
+                        "direction": None, "developing_direction": developing,
                         "detail": f"Recent swings ({' → '.join(tail)}) show a developing {developing} pair, "
                                   f"but it takes 4 confirmed swings in a row to call this a real trend — "
                                   f"still range/sideways until then."}
@@ -702,6 +702,31 @@ def trade_setup_state(mtf, trend_15m, breakouts_15m, breakdowns_15m, retests_15m
     return {"status": "setup_forming", "label": "SETUP FORMING", "why": mtf["detail"],
             "watch_for": f"A real (close-confirmed, held) {direction} breakout/breakdown or retest "
                          f"near the nearest zone before treating this as confirmed."}
+
+
+def primary_trend_label(trend, structure_signal):
+    """Tiered classification the raw trend/sideways label can't express on
+    its own — distinguishes a genuinely directionless range from one where
+    a real (but not yet 4-in-a-row confirmed) HH+HL or LH+LL pair is
+    emerging. Never invents a trend early just to produce a trade — the
+    "developing" tier is explicitly still a form of RANGE, not a trend."""
+    if trend in ("bullish", "bearish"):
+        return {"tier": trend, "label": trend.upper()}
+    if structure_signal and structure_signal.get("status") == "developing":
+        d = structure_signal.get("developing_direction")
+        return {"tier": f"developing_{d}", "label": f"DEVELOPING {d.upper()}"}
+    return {"tier": "no_trend", "label": "NO TREND"}
+
+
+def directional_bias(trend, primary_trend):
+    """The directional lean implied by primary_trend_label — NEUTRAL
+    whenever there isn't one yet, never guessed from noise."""
+    if trend in ("bullish", "bearish"):
+        return trend
+    tier = primary_trend["tier"]
+    if tier.startswith("developing_"):
+        return tier.split("_", 1)[1]
+    return "neutral"
 
 
 def market_state(trend, current_price, support, resistance):
