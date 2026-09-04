@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
     "retest_tolerance_pct": 0.2,
     "retest_confirm_candles": 2,
     "fake_breakout_window": 3,
+    "sr_major_min_touches": 3,  # zones at/above this touch count are "major"; below it (but still >= sr_min_touches) are "minor"
 }
 
 
@@ -498,8 +499,14 @@ def snapshot(state):
     nearest_support = _nearest_zone(ranked_zones, last_price, "support") if last_price is not None else None
 
     def zone_out(z):
+        touches = len(z["touches"])
+        tier = "major" if touches >= state.config["sr_major_min_touches"] else "minor"
+        last_touch = max((t["i"] for t in z["touches"]), default=None)
         return {"lo": z["lo"], "hi": z["hi"], "mid": z["mid"], "kind": z["kind"],
-                "touches": len(z["touches"]), "strength": round(_zone_strength(z, now_i, state.config), 2)}
+                "touches": touches, "tier": tier,
+                "strength": round(_zone_strength(z, now_i, state.config), 2),
+                "last_touch_i": last_touch,
+                "distance_from_price": (round(z["mid"] - last_price, 2) if last_price is not None else None)}
 
     return {
         "trend": state.trend,

@@ -438,6 +438,23 @@
   .oc-gate-locked { border-color: color-mix(in srgb, var(--amber) 30%, var(--line)); background: var(--amber-bg); }
   .oc-col-active { border-radius: 10px; box-shadow: 0 0 0 1px var(--accent); padding: 10px; }
   .oc-col-dim { opacity: .55; }
+  .key-levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 14px 0; }
+  .kl-col-title { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; font-weight: 700; margin-bottom: 6px; }
+  .kl-col-title.up { color: var(--up); } .kl-col-title.down { color: var(--down); }
+  .kl-row {
+    display: flex; align-items: center; gap: 8px; font-size: 11.5px; padding: 6px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .kl-row:last-child { border-bottom: none; }
+  .kl-row.flat { color: var(--faint); font-style: italic; }
+  .kl-tier {
+    font-size: 8.5px; font-weight: 800; letter-spacing: .5px; padding: 2px 6px; border-radius: 5px;
+    flex: none;
+  }
+  .kl-tier.major { background: var(--accent-bg); color: var(--accent); }
+  .kl-tier.minor { background: var(--surface2); color: var(--faint); }
+  .kl-range { font-family: var(--mono); font-weight: 700; flex: none; }
+  .kl-meta { color: var(--faint); font-size: 10.5px; }
   .oc-cand {
     background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
     padding: 12px 14px; margin-bottom: 10px; box-shadow: var(--elev-1);
@@ -574,6 +591,11 @@
   .bias-reason.down .bdot { background: var(--down); }
   .bias-reason.flat .bdot { background: var(--amber); }
   .bias-note { font-size: 11px; color: var(--muted); margin-top: 10px; font-style: italic; }
+  .bias-weight-tag {
+    font-size: 9px; color: var(--faint); font-family: var(--mono); text-transform: uppercase;
+    letter-spacing: .4px;
+  }
+  .bias-score { font-size: 11px; color: var(--faint); margin-top: 10px; font-family: var(--mono); }
   .ai-trend { border-left: 3px solid var(--accent); }
   .ai-trend .ai-summary { font-size: 12.5px; color: var(--text); font-style: normal; line-height: 1.5; }
   .ai-generated-at { font-size: 10.5px; color: var(--faint); font-family: var(--mono); margin-top: 6px; }
@@ -912,7 +934,16 @@ function renderBanner(mkt) {
   b.style.display = "flex";
 }
 
-function renderSummary(checks, marketOpen) {
+// Mirrors app.py's BIAS_WEIGHTS — display-only (which category each check
+// belongs to and its weight badge); the actual CONSTRUCTIVE/MIXED/CAUTIOUS
+// decision is computed server-side in pre_market_bias(), not recomputed here.
+const BIAS_CATEGORY = {
+  chk_gift: "GIFT NIFTY", chk_us: "GLOBAL EQUITY", chk_asia: "GLOBAL EQUITY",
+  chk_usdinr: "FX", chk_brent: "CRUDE", chk_news: "NEWS", chk_vix: "VOLATILITY (not counted)",
+};
+const BIAS_WEIGHT = { chk_gift: 3, chk_us: 2, chk_asia: 1, chk_usdinr: 1, chk_brent: 1.5, chk_news: 1.5, chk_vix: 0 };
+
+function renderSummary(checks, marketOpen, bias) {
   // chk_nifty (support/resistance) is never a directional signal — it's
   // shown as its own wide ladder card, not one of the grid cards a user
   // would count by eye, so it must not silently inflate the tally either
@@ -927,24 +958,23 @@ function renderSummary(checks, marketOpen) {
      <span class="schip mid">◆ ${mid} neutral</span>
      <span class="schip bad">▼ ${bad} caution</span>`;
 
-  // A one-signal lead (e.g. 4 vs 3) is not a meaningful majority — treating
-  // it as a confident directional call overstates what an equal-weighted
-  // count of unrelated inputs (crude, VIX, news, FX...) can actually say.
-  // Require a real margin, and drop the BULLISH/BEARISH wording entirely —
-  // this is pre-market CONTEXT, not an intraday trend call (that's the
-  // Trend tab's job, from real price structure, once the market is open).
-  let label, cls;
-  if (bad - good >= 2) { label = "CAUTIOUS"; cls = "down"; }
-  else if (good - bad >= 2) { label = "CONSTRUCTIVE"; cls = "up"; }
-  else { label = "MIXED"; cls = "flat"; }
+  const label = (bias && bias.label) || "MIXED";
+  const cls = label === "CAUTIOUS" ? "down" : label === "CONSTRUCTIVE" ? "up" : "flat";
 
-const RANK = { down: 0, up: 1, flat: 2 };
+  const RANK = { down: 0, up: 1, flat: 2 };
   const reasons = signals
-    .filter(c => c.id !== "chk_nifty")  // support/resistance isn't a directional signal — shown as its own ladder card instead
     .slice()
     .sort((a, b) => RANK[a.verdict_class] - RANK[b.verdict_class])
-    .map(c => `<div class="bias-reason ${c.verdict_class}"><span class="bdot"></span>
-      ${esc(c.title.replace(/^\d+\s*·\s*/, ""))}: ${esc(c.verdict)}</div>`).join("");
+    .map(c => {
+      const cat = BIAS_CATEGORY[c.id];
+      const w = BIAS_WEIGHT[c.id];
+      const badge = cat ? ` <span class="bias-weight-tag">${cat}${w ? ` · weight ${w}` : ""}</span>` : "";
+      return `<div class="bias-reason ${c.verdict_class}"><span class="bdot"></span>
+      ${esc(c.title.replace(/^\d+\s*·\s*/, ""))}: ${esc(c.verdict)}${badge}</div>`;
+    }).join("");
+
+  const scoreLine = bias && bias.max_possible ? `<div class="bias-score">Weighted score: ${bias.score} / ±${bias.max_possible}
+    (GIFT NIFTY counts most, VIX counts for zero — it measures expected move size, not direction)</div>` : "";
 
   document.getElementById("bias").innerHTML = `
     <div class="bias ${cls}">
@@ -952,10 +982,11 @@ const RANK = { down: 0, up: 1, flat: 2 };
         <span class="bias-verdict">PRE-MARKET CONTEXT: ${label}</span>
         <span class="bias-counts">${good} positive · ${mid} neutral · ${bad} adverse</span>
       </div>
-      <div class="bias-why">Driving the read</div>
+      <div class="bias-why">Driving the read (weighted by category, not an equal vote)</div>
       <div class="bias-reasons">${reasons || '<div class="bias-reason flat"><span class="bdot"></span>No strong signals either way</div>'}</div>
-      <div class="bias-note">Rule-based pre-market checks (GIFT, global markets, VIX, FX, crude, news) — an
-      equal-weighted count of unrelated inputs, not a NIFTY trend call. ${marketOpen
+      ${scoreLine}
+      <div class="bias-note">Rule-based, weighted pre-market checks (GIFT, global markets, FX, crude, news) —
+      not a NIFTY trend call. ${marketOpen
         ? "Market is OPEN — this reflects pre-open conditions only; the Trend tab's real intraday price structure is the current, primary verdict now."
         : "Not a prediction of the whole trading day; once the market opens, actual price structure (Trend tab) takes priority over this."}</div>
     </div>`;
@@ -1010,7 +1041,7 @@ async function load() {
     const gridChecks = checks.filter(c => c.id !== "chk_nifty");
     document.getElementById("checks").innerHTML = gridChecks.map(checkCardHTML).join("");
     document.getElementById("tabCountA").textContent = checks.length;
-    renderSummary(checks, d.market.open);
+    renderSummary(checks, d.market.open, d.bias);
 
     document.getElementById("aiTrend").innerHTML = newsData ? aiTrendHTML(newsData.trend, newsData.generated_at, d.market.open) : "";
 
@@ -1209,6 +1240,26 @@ function trendStatusHTML(d) {
 
   const eventCell = (label, val, cls, sub) =>
     `<div class="event-cell ${cls}"><div class="ec-label">${label}</div><div class="ec-val">${esc(val)}</div>${sub ? `<div class="ec-sub">${esc(sub)}</div>` : ""}</div>`;
+
+  const keyLevelsHTML = () => {
+    const zones = d[`zones_${tf}`] || [];
+    if (!zones.length) return "";
+    const row = z => {
+      const dist = z.distance_from_price != null ? `${z.distance_from_price > 0 ? "+" : ""}${fmtPrice(z.distance_from_price)}` : "—";
+      return `<div class="kl-row ${z.kind === "support" ? "up" : "down"}">
+        <span class="kl-tier ${z.tier}">${z.tier === "major" ? "MAJOR" : "minor"}</span>
+        <span class="kl-range">${fmtPrice(z.lo)}–${fmtPrice(z.hi)}</span>
+        <span class="kl-meta">${z.touches} touch${z.touches === 1 ? "" : "es"} · strength ${z.strength} · ${dist} from price</span>
+      </div>`;
+    };
+    const res = zones.filter(z => z.kind === "resistance").sort((a, b) => a.mid - b.mid);
+    const sup = zones.filter(z => z.kind === "support").sort((a, b) => b.mid - a.mid);
+    return `
+    <div class="key-levels">
+      <div class="kl-col"><div class="kl-col-title down">RESISTANCE (${tfLabel})</div>${res.map(row).join("") || '<div class="kl-row flat">None qualified yet</div>'}</div>
+      <div class="kl-col"><div class="kl-col-title up">SUPPORT (${tfLabel})</div>${sup.map(row).join("") || '<div class="kl-row flat">None qualified yet</div>'}</div>
+    </div>`;
+  };
 
   const structureEventsHTML = () => {
     const bosArr = d[`bos_events_${tf}`] || [];
@@ -1424,6 +1475,7 @@ function trendStatusHTML(d) {
       <div title="The price level that would undo the current ${tfLabel} trend read if broken — the most recent confirmed swing this trend rests on"><span class="tg-label">INVALIDATION LEVEL</span><span class="tg-val">${d[`invalidation_level_${tf}`] != null ? fmtPrice(d[`invalidation_level_${tf}`]) : "—"}</span></div>
       ${trendStart ? `<div title="Candle where the current unbroken HH/HL or LH/LL run began — also marked on the chart below"><span class="tg-label">TREND STARTED</span><span class="tg-val">${fmtDate(trendStart.ts)}, ${fmtTime(trendStart.ts)}</span></div>` : ""}
     </div>
+    ${keyLevelsHTML()}
     ${structureEventsHTML()}
     ${whatChangesHTML()}
     <div class="trend-candle-status ${stale_date ? "date-stale" : ""}">

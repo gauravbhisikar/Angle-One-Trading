@@ -989,6 +989,56 @@ def pick_change(cur, prev):
     return (cur - prev) / prev * 100.0
 
 
+# Category weights for the pre-market bias read, reflecting real-world
+# relevance to the NIFTY open rather than treating every input as an equal
+# vote (the previous "4 up vs 3 down -> BULLISH" approach). GIFT NIFTY is
+# the single most direct predictor of the opening print; global equity
+# cues are real but secondary; crude/FX/news are slower macro factors.
+# chk_vix is EXPLICITLY weight 0 — it measures expected magnitude of
+# movement, not direction (its own "detail" text says so), so a "calmer
+# market" reading was previously counted as a bullish vote despite that,
+# a real inconsistency fixed here by excluding it from the tally entirely.
+BIAS_WEIGHTS = {
+    "chk_gift": 3.0, "chk_us": 2.0, "chk_asia": 1.0,
+    "chk_usdinr": 1.0, "chk_brent": 1.5, "chk_news": 1.5, "chk_vix": 0.0,
+}
+
+
+def pre_market_bias(checks, news_check=None):
+    """Weighted (not equal-vote) pre-market read. Returns CONSTRUCTIVE /
+    MIXED / CAUTIOUS — never BULLISH/BEARISH, since this is pre-market
+    context feeding the checks grid, not an intraday NIFTY trend call
+    (trend_engine.py's Trend tab owns that, from real closed-candle price
+    structure, and this function has no influence on it whatsoever)."""
+    all_checks = list(checks) + ([news_check] if news_check else [])
+    score = 0.0
+    max_possible = 0.0
+    contributions = []
+    for c in all_checks:
+        w = BIAS_WEIGHTS.get(c.get("id"), 0.0)
+        if w == 0.0:
+            continue
+        max_possible += w
+        if c["verdict_class"] == "up":
+            score += w
+        elif c["verdict_class"] == "down":
+            score -= w
+        contributions.append({"id": c["id"], "title": c["title"], "weight": w,
+                               "verdict_class": c["verdict_class"]})
+    # Require the weighted score to clear a real fraction of the total
+    # possible weight before calling it anything but MIXED — same
+    # "don't call a one-signal lead a majority" principle applied here too.
+    threshold = max_possible * 0.35
+    if max_possible > 0 and score >= threshold:
+        label = "CONSTRUCTIVE"
+    elif max_possible > 0 and score <= -threshold:
+        label = "CAUTIOUS"
+    else:
+        label = "MIXED"
+    return {"label": label, "score": round(score, 2), "max_possible": round(max_possible, 2),
+            "contributions": contributions}
+
+
 # --------------------------------------------------------------------------
 # Build the full snapshot
 # --------------------------------------------------------------------------
@@ -1337,12 +1387,21 @@ def build_market():
     else:
         check("chk_nifty", "7 · NIFTY Yesterday Levels", "Unavailable", "flat", "—", "", "Yahoo")
 
+    with CACHE_LOCK:
+        news_snap = CACHE.get("news") or {}
+    news_sent = news_snap.get("sentiment") or {}
+    news_check = None
+    if news_sent.get("relevant_count"):
+        news_check = {"id": "chk_news", "title": "8 · News Sentiment", "verdict_class": news_sent.get("class")}
+    bias = pre_market_bias(checks, news_check)
+
     return {
         "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
         "generated_epoch": time.time(),
         "market": market_info(),
         "refresh_seconds": REFRESH_SECONDS,
         "checks": checks,
+        "bias": bias,
         "cards": cards,
         "warnings": warnings,
         "build": BUILD_COMMIT,
@@ -1752,7 +1811,7 @@ class Handler(BaseHTTPRequestHandler):
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
                             "market": market_info(),
                             "refresh_seconds": REFRESH_SECONDS,
-                            "checks": [], "cards": [],
+                            "checks": [], "cards": [], "bias": None,
                             "build": BUILD_COMMIT, "build_started": BUILD_STARTED}
             body = json.dumps(snap).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
