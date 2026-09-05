@@ -176,28 +176,50 @@ NEWS_NEGATIVE_TERMS = (
     "downgrade", "crisis", "conflict", "attack", "sell-off", "selloff",
     "slump", "misses estimates", "inflation surge",
 )
+# These are inherently global-systemic — the AI classification path (see
+# openrouter_classify_news's prompt) explicitly allows global macro (Fed,
+# oil/OPEC, major geopolitical/war escalation) to be medium/high impact
+# even with no direct India mention, since it can move NIFTY via
+# global risk-off regardless. Kept high/medium here without an India-term
+# requirement to match that same rule.
 NEWS_HIGH_IMPACT_TERMS = (
     "rbi", "federal reserve", " fed ", "war", "crash", "recession",
     "default", "sanctions", "ceasefire", "rate hike", "rate cut",
     "geopolitical", "election", "tariff", "opec",
 )
+# Unlike the terms above, these (earnings/GDP/IPO/merger/...) are only
+# medium-impact if they're ALSO tied to India/NIFTY somehow — "Foxconn
+# reports quarterly earnings" or "Japan GDP grows" has no India angle and
+# must stay low-impact, same strictness the AI prompt already applies.
 NEWS_MEDIUM_IMPACT_TERMS = (
     "earnings", "gdp", "cpi", "jobs report", "ipo", "merger",
     "acquisition", "quarterly results", "guidance", "inflation",
+)
+NEWS_INDIA_TERMS = (
+    "india", "indian", "nifty", "sensex", "rupee", "sebi", "bse", "nse",
+    "mumbai", "delhi", "adani", "tata", "reliance", "infosys", "hdfc",
+    "icici", "modi", "fii", "dii", "rbi",
 )
 
 
 def keyword_score_headline(headline):
     """Deterministic fallback when no LLM key is configured (or the LLM
     call fails) — same if/else philosophy as every other check on this
-    dashboard, just applied per-headline instead of per-number."""
+    dashboard, just applied per-headline instead of per-number. Mirrors
+    the AI path's own strictness rule: global-macro terms can be
+    medium/high with no India mention, but generic company/economy terms
+    (earnings, GDP, IPO...) need an explicit India/NIFTY tie or they stay
+    low-impact — a headline like "Foxconn Q3 earnings beat estimates" has
+    no NIFTY relevance and must not count toward the tally just because
+    "earnings" matched."""
     text = f" {headline.lower()} "
     pos = sum(1 for t in NEWS_POSITIVE_TERMS if t in text)
     neg = sum(1 for t in NEWS_NEGATIVE_TERMS if t in text)
     sentiment = "negative" if neg > pos else ("positive" if pos > neg else "neutral")
+    india_relevant = any(t in text for t in NEWS_INDIA_TERMS)
     if any(t in text for t in NEWS_HIGH_IMPACT_TERMS):
         impact = "high"
-    elif any(t in text for t in NEWS_MEDIUM_IMPACT_TERMS):
+    elif any(t in text for t in NEWS_MEDIUM_IMPACT_TERMS) and india_relevant:
         impact = "medium"
     else:
         impact = "low"
