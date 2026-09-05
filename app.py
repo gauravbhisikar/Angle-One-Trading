@@ -181,11 +181,23 @@ NEWS_NEGATIVE_TERMS = (
 # oil/OPEC, major geopolitical/war escalation) to be medium/high impact
 # even with no direct India mention, since it can move NIFTY via
 # global risk-off regardless. Kept high/medium here without an India-term
-# requirement to match that same rule.
+# requirement to match that same rule. Also covers FX/currency (USD/INR is
+# already its own dashboard check, but currency-moving headlines are exactly
+# the kind of story that check can't catch until the number itself moves)
+# and crude oil (India imports most of its crude — already the same logic
+# as the dashboard's own Brent Crude check) and broader US macro (treasury
+# yields, US inflation/jobs data move global risk appetite same as Fed does).
 NEWS_HIGH_IMPACT_TERMS = (
     "rbi", "federal reserve", " fed ", "war", "crash", "recession",
     "default", "sanctions", "ceasefire", "rate hike", "rate cut",
-    "geopolitical", "election", "tariff", "opec",
+    "geopolitical", "election", "tariff", "opec", "opec+",
+    # FX / currency
+    "forex", "currency", "dollar index", "rupee", "devalu", "yuan",
+    # crude oil
+    "crude oil", "brent", "wti", "oil price", "oil prices",
+    # broader US macro / trade
+    "treasury yield", "us inflation", "us jobs", "nonfarm payroll",
+    "trade war", "trade deal", "export ban", "import duty", "fomc",
 )
 # Unlike the terms above, these (earnings/GDP/IPO/merger/...) are only
 # medium-impact if they're ALSO tied to India/NIFTY somehow — "Foxconn
@@ -194,11 +206,12 @@ NEWS_HIGH_IMPACT_TERMS = (
 NEWS_MEDIUM_IMPACT_TERMS = (
     "earnings", "gdp", "cpi", "jobs report", "ipo", "merger",
     "acquisition", "quarterly results", "guidance", "inflation",
+    "fii", "fpi", "fdi", "current account", "trade deficit",
 )
 NEWS_INDIA_TERMS = (
     "india", "indian", "nifty", "sensex", "rupee", "sebi", "bse", "nse",
     "mumbai", "delhi", "adani", "tata", "reliance", "infosys", "hdfc",
-    "icici", "modi", "fii", "dii", "rbi",
+    "icici", "modi", "fii", "fpi", "dii", "fdi", "rbi", "gst",
 )
 
 
@@ -248,10 +261,16 @@ def openrouter_classify_news(items):
         "NIFTY 50/Indian equities, not just 'is this market-related news in "
         "general'. Lifestyle pieces, US-only politics/culture, and company "
         "profiles with no India angle are impact:low regardless of tone. "
-        "Only global macro (Fed, oil/Hormuz, major geopolitical/war "
-        "escalation, US market moves with global risk-off potential) or "
-        "anything India-specific (RBI, Indian companies, India-US trade) "
-        "can be impact:medium or impact:high.\n\n"
+        "Only these can be impact:medium or impact:high: (1) global macro — "
+        "Fed/FOMC rate decisions, US treasury yields, US inflation/jobs data, "
+        "crude oil/OPEC/Hormuz, major geopolitical/war escalation, trade "
+        "wars/tariffs, US market moves with global risk-off potential; "
+        "(2) forex/currency — USD/INR, rupee moves, dollar index, other "
+        "major currency devaluation/crises; (3) anything India-specific — "
+        "RBI, Indian companies, India-US trade, FII/FPI/FDI flows, GST, "
+        "Indian government policy. Everything else (US-only politics/"
+        "culture, lifestyle, sports, a foreign company's earnings with no "
+        "India/global-macro angle) is impact:low regardless of tone.\n\n"
         "For each numbered headline, judge whether it's likely to "
         "materially affect NIFTY 50 today.\n\n"
         "Respond with ONLY a JSON array (no prose, no markdown fences), "
