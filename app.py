@@ -1586,6 +1586,7 @@ def build_trend():
         out[f"fake_breakouts_{tf}"] = s["fake_breakouts"]
         out[f"bos_events_{tf}"] = s["bos_events"]
         out[f"choch_events_{tf}"] = s["choch_events"]
+        out[f"abnormal_candles_{tf}"] = s["abnormal_candles"]
         out[f"structure_signal_{tf}"] = s["structure_signal"]
         out[f"nearest_support_{tf}"] = s["nearest_support"]
         out[f"nearest_resistance_{tf}"] = s["nearest_resistance"]
@@ -1598,16 +1599,26 @@ def build_trend():
     out["nearest_resistance"] = out["nearest_resistance_15m"]
     out["invalidation_level"] = out["invalidation_level_15m"]
     out["mtf_read"] = trend_engine.multi_timeframe_read(out["trend_1h"], out["trend_15m"], out["trend_5m"])
+    out["primary_trend"] = trend_engine.primary_trend_label(out["trend_15m"], out["structure_signal_15m"])
+    out["directional_bias"] = trend_engine.directional_bias(out["trend_15m"], out["primary_trend"])
+    # Trade state is keyed off directional_bias (bullish/bearish/neutral),
+    # NOT the raw trend_15m sideways gate — a "developing" structure
+    # (see primary_trend_label) already carries a real bias and, backed by
+    # a genuine close-confirmed breakout/breakdown + retest, can reach
+    # STRUCTURE CONFIRMED without ever needing a full 4-in-a-row trend.
+    # See trade_setup_state's docstring for the exact incident this fixed
+    # (2026-09-07: two real breakdowns + a confirmed retest, but trend_15m
+    # never left "sideways" in that window under the old trend-gated logic).
     out["setup_state"] = trend_engine.trade_setup_state(
-        out["mtf_read"], out["trend_15m"], out["breakouts_15m"], out["breakdowns_15m"],
+        out["directional_bias"], out["trend_5m"], out["trend_1h"],
+        out["breakouts_15m"], out["breakdowns_15m"],
         out["retests_15m"], out["fake_breakouts_15m"], out["choch_events_15m"],
         len(out["candles_15m"]) - 1, data_status=data_status)
     out["market_state"] = trend_engine.market_state(
-        out["trend_15m"], current_price, out["nearest_support_15m"], out["nearest_resistance_15m"])
+        out["trend_15m"], current_price, out["nearest_support_15m"], out["nearest_resistance_15m"],
+        out["structure_signal_15m"])
     out["watch_conditions"] = trend_engine.watch_conditions(
         out["trend_15m"], out["nearest_support_15m"], out["nearest_resistance_15m"], out["invalidation_level_15m"])
-    out["primary_trend"] = trend_engine.primary_trend_label(out["trend_15m"], out["structure_signal_15m"])
-    out["directional_bias"] = trend_engine.directional_bias(out["trend_15m"], out["primary_trend"])
     out["risk_levels"] = (trend_engine.risk_levels(
         out["directional_bias"], current_price, out["nearest_support_15m"],
         out["nearest_resistance_15m"], out["invalidation_level_15m"])
@@ -1903,7 +1914,7 @@ class Handler(BaseHTTPRequestHandler):
                             f"structure_sequence_{tf}": [], f"swings_{tf}": [], f"zones_{tf}": [],
                             f"breakouts_{tf}": [], f"breakdowns_{tf}": [], f"retests_{tf}": [],
                             f"fake_breakouts_{tf}": [], f"bos_events_{tf}": [], f"choch_events_{tf}": [],
-                            f"structure_signal_{tf}": None,
+                            f"abnormal_candles_{tf}": [], f"structure_signal_{tf}": None,
                             f"nearest_support_{tf}": None, f"nearest_resistance_{tf}": None,
                             f"invalidation_level_{tf}": None, f"candles_{tf}": [], f"forming_{tf}": None,
                         })

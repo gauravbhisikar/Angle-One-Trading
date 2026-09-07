@@ -1333,6 +1333,7 @@ function trendStatusHTML(d) {
   const BIAS_EMOJI = { bullish: "🟢", bearish: "🔴", neutral: "⚪" };
   const SETUP_LABEL = {
     wait: "🟡 WAIT", watching: "🟡 WATCHING", setup_forming: "🟡 SETUP FORMING",
+    structure_confirmed_pending_5m: "🟡 WATCH — STRUCTURE CONFIRMED, AWAITING 5M",
     structure_confirmed: "✅ CONFIRMED — REVIEW OPTIONS",
     invalidated: "⚠️ SETUP INVALIDATED", data_unreliable: "⚠️ DATA UNRELIABLE — WAIT",
   };
@@ -1340,9 +1341,10 @@ function trendStatusHTML(d) {
   // don't trade; CONFIRMED means the direction side (CE/PE) is worth
   // reviewing manually; nothing else is ever a buy/sell instruction.
   const NEXT_ACTION = {
-    wait: "Don't trade — no usable setup yet.",
-    watching: "Don't trade yet — direction is forming, wait for 5M/structure confirmation.",
+    wait: "Don't trade — no directional bias yet.",
+    watching: "Don't trade yet — bias exists, but no real break/retest evidence yet.",
     setup_forming: "Don't trade yet — a break happened but hasn't been confirmed as real.",
+    structure_confirmed_pending_5m: bias => `Structure is confirmed ${bias} — but 5M hasn't confirmed entry timing yet. Watch, don't act.`,
     structure_confirmed: bias => `Go to the ${bias === "bullish" ? "CE" : "PE"} side — review contracts manually, this is not a buy signal.`,
     invalidated: "Cancel/ignore the previous read — don't act on it. Wait for a fresh confirmation.",
     data_unreliable: "Don't trade — candle data is stale, nothing here can be trusted right now.",
@@ -1405,11 +1407,15 @@ function trendStatusHTML(d) {
   const progressionHTML = () => {
     const setup = d.setup_state;
     if (!setup) return "";
-    const t1h = d.trend_1h, t15 = d.trend_15m;
+    const t1h = d.trend_1h;
     const hasContext = t1h && t1h !== "sideways";
-    const hasPrimary = t15 && t15 !== "sideways";
+    // Primary-trend step now reflects directional BIAS (which "developing"
+    // structure already carries), not the raw strict trend_15m label —
+    // otherwise this step could never light up during a developing setup,
+    // contradicting the trade-state steps below it that already progressed.
+    const hasPrimary = d.directional_bias && d.directional_bias !== "neutral";
     const hasLevel = d.nearest_support_15m != null && d.nearest_resistance_15m != null;
-    const order = ["wait", "watching", "setup_forming", "structure_confirmed"];
+    const order = ["wait", "watching", "setup_forming", "structure_confirmed_pending_5m", "structure_confirmed"];
     // invalidated/data_unreliable aren't points ON the funnel — they're a
     // warning override, shown as their own row instead of faking a step index.
     if (setup.status === "invalidated" || setup.status === "data_unreliable") {
@@ -1420,9 +1426,9 @@ function trendStatusHTML(d) {
       { label: "CONTEXT (1H)", done: hasContext },
       { label: "PRIMARY TREND (15M)", done: hasPrimary },
       { label: "KEY LEVEL", done: hasLevel },
-      { label: "STRUCTURE CONFIRMATION", done: idx >= 2 },
-      { label: "5M CONFIRMATION", done: idx >= 3 },
-      { label: "OPTION REVIEW", done: idx >= 3 },
+      { label: "STRUCTURE CONFIRMATION", done: idx >= 3 },
+      { label: "5M CONFIRMATION", done: idx >= 4 },
+      { label: "OPTION REVIEW", done: idx >= 4 },
     ];
     let currentSet = false;
     const rendered = steps.map(s => {
@@ -1490,11 +1496,16 @@ function trendStatusHTML(d) {
 
   const sig = d[`structure_signal_${tf}`];
   const sigCls = sig && sig.direction === "bullish" ? "up" : sig && sig.direction === "bearish" ? "down" : "flat";
-  const sigEmoji = sig && sig.status === "choch_confirmed" ? "🔄" : sig && sig.status === "pullback_watch" ? "👀" : "✅";
+  const SIG_EMOJI = { choch_confirmed: "🔄", pullback_watch: "👀", forming: "⏳", range: "➖", developing: "👀" };
+  const sigEmoji = (sig && SIG_EMOJI[sig.status]) || "✅";
 
   const fakeBos = d[`fake_breakouts_${tf}`] || [];
   const recentFake = fakeBos.length ? fakeBos[fakeBos.length - 1] : null;
   const fakeIsRecent = recentFake && lastCandles.length && recentFake.i >= lastCandles.length - 6;
+
+  const abnormalArr = d[`abnormal_candles_${tf}`] || [];
+  const recentAbnormal = abnormalArr.length ? abnormalArr[abnormalArr.length - 1] : null;
+  const abnormalIsRecent = recentAbnormal && lastCandles.length && recentAbnormal.i >= lastCandles.length - 3;
 
   return `
   ${staleBanner}
@@ -1545,6 +1556,12 @@ function trendStatusHTML(d) {
         <div class="sig-legend-row">What happened: the candle CLOSED beyond the level (not just a wick) — that's a real break. But within a few candles, price closed back on the original side before it could hold. Break ≠ confirmation.</div>
         <div class="sig-legend-row sig-legend-note">This overrides the structure signal above for THIS specific level — even a "BOS" swing built on a fake break isn't trustworthy until a fresh, real break + retest happens.</div>
       </div>
+    </div>` : ""}
+    ${abnormalIsRecent ? `
+    <div class="mtf-verdict flat">
+      <span class="mtf-verdict-label">⚠️ ABNORMAL CANDLE — REVIEW</span>
+      <span class="mtf-verdict-text">Range ${fmtPrice(recentAbnormal.range)} pts vs recent average ${fmtPrice(recentAbnormal.avg_range)} pts</span>
+      <div class="mtf-verdict-detail">This candle's range is far outside the recent norm for ${tfLabel} — could be a genuine sharp move or a data glitch. Any swing/breakout/CHoCH this candle alone produced is flagged, not suppressed — use judgment before treating it as confirmed structure.</div>
     </div>` : ""}
     <div class="trend-grid">
       <div title="Sequence of confirmed swing highs/lows on ${tfLabel} candles — HH/HL = higher high/higher low (bullish), LH/LL = lower high/lower low (bearish)"><span class="tg-label">${tfLabel} STRUCTURE</span><span class="tg-val">${(d[`structure_sequence_${tf}`] || []).join(" → ") || "—"}</span></div>

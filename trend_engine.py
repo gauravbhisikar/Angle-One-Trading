@@ -19,6 +19,8 @@ DEFAULT_CONFIG = {
     "retest_confirm_candles": 2,
     "fake_breakout_window": 3,
     "sr_major_min_touches": 3,  # zones at/above this touch count are "major"; below it (but still >= sr_min_touches) are "minor"
+    "abnormal_lookback": 20,  # candles of history required before a range can be judged abnormal
+    "abnormal_multiplier": 4.0,  # candle range >= (recent avg range * this) is flagged
 }
 
 
@@ -78,6 +80,8 @@ class TrendState:
         self.fake_breakouts = []  # confirmed fake breakouts/breakdowns (direction field distinguishes)
         self.bos_events = []  # Break of Structure — swing continues the already-established trend
         self.choch_events = []  # Change of Character — confirmed trend-flip trigger (close through the swing that was holding the old trend)
+        self.abnormal_candles = []  # candles whose range is statistically far outside the recent norm
+        self._abnormal_index_set = set()  # fast lookup mirror of abnormal_candles' "i" values
         self.last_processed_ts = None
         self._last_confirmed_high_i = None
         self._last_confirmed_low_i = None
@@ -190,10 +194,12 @@ def _nearest_zone(zones, price, kind):
 def _check_breakout(state, i, candle, config):
     events = []
     for zone in state.zones:
+        abnormal = i in state._abnormal_index_set
         if zone["kind"] == "resistance" and candle["close"] > zone["hi"]:
             level = zone["hi"]
             _flip_zone_kind(zone, "support", i)
-            ev = {"i": i, "ts": candle["ts"], "price": candle["close"], "zone_mid": zone["mid"], "direction": "bullish"}
+            ev = {"i": i, "ts": candle["ts"], "price": candle["close"], "zone_mid": zone["mid"],
+                  "direction": "bullish", "abnormal": abnormal}
             state.breakouts.append(ev)
             events.append(("breakout", ev))
             state.retest_watches.append(RetestWatch(zone, "bullish", i))
@@ -201,7 +207,8 @@ def _check_breakout(state, i, candle, config):
         elif zone["kind"] == "support" and candle["close"] < zone["lo"]:
             level = zone["lo"]
             _flip_zone_kind(zone, "resistance", i)
-            ev = {"i": i, "ts": candle["ts"], "price": candle["close"], "zone_mid": zone["mid"], "direction": "bearish"}
+            ev = {"i": i, "ts": candle["ts"], "price": candle["close"], "zone_mid": zone["mid"],
+                  "direction": "bearish", "abnormal": abnormal}
             state.breakdowns.append(ev)
             events.append(("breakdown", ev))
             state.retest_watches.append(RetestWatch(zone, "bearish", i))
@@ -293,7 +300,8 @@ def _update_reversal(state, i, candle, new_label):
                 # after a CHoCH, only flips once structure truly confirms.
                 state.possible_reversal["stage"] = "confirmed"
                 state.choch_events.append({"i": i, "ts": candle["ts"], "direction": "bullish",
-                                            "trigger_level": r["trigger_level"], "price": candle["close"]})
+                                            "trigger_level": r["trigger_level"], "price": candle["close"],
+                                            "abnormal": i in state._abnormal_index_set})
     elif state.trend == "bullish":
         if new_label == "LH":
             state.possible_reversal = {"direction": "bearish", "stage": "lh_formed_awaiting_break",
@@ -305,7 +313,8 @@ def _update_reversal(state, i, candle, new_label):
             if candle["close"] < r["trigger_level"]:
                 state.possible_reversal["stage"] = "confirmed"
                 state.choch_events.append({"i": i, "ts": candle["ts"], "direction": "bearish",
-                                            "trigger_level": r["trigger_level"], "price": candle["close"]})
+                                            "trigger_level": r["trigger_level"], "price": candle["close"],
+                                            "abnormal": i in state._abnormal_index_set})
 
 
 def _invalidation_level(state):
@@ -321,7 +330,19 @@ def _invalidation_level(state):
 def _structure_signal(state):
     """Deterministic pullback-vs-reversal / BOS-vs-CHoCH summary for a UI
     card. No AI — purely derived from possible_reversal + trend. Statuses:
-      trend_intact   - no counter-trend swing forming, trend continuing on BOS
+      forming        - not enough confirmed swings exist yet to say anything
+                        at all (session warm-up) — genuinely different from
+                        "range": a range means we HAVE data and it's mixed,
+                        forming means we DON'T have data yet. Conflating the
+                        two into one bucket was a real bug: it made a
+                        1st-candle session and a truly range-bound market
+                        both read as "sideways/no trend", when only one of
+                        those is an actual verdict.
+      range          - enough swings exist, but they don't form a clean
+                        HH+HL or LH+LL run — a genuine range read.
+      developing     - a real HH+HL (or LH+LL) pair has formed but hasn't
+                        reached 4-in-a-row yet — still range, but leaning.
+      trend_intact   - trend is bullish/bearish and continuing on BOS.
       pullback_watch - a counter-trend swing has formed (potential CHoCH),
                         but price hasn't broken through the trigger level yet
                         -> still just a pullback/bounce until it does
@@ -347,6 +368,7 @@ def _structure_signal(state):
                 # sequence instead (needs 4 in a row, not 2, to flip trend).
                 return {"status": "developing", "label": f"Range — developing {developing} sequence",
                         "direction": None, "developing_direction": developing,
+                        "confirmed_swings": len(state.swings), "required_swings": 4,
                         "detail": f"Recent swings ({' → '.join(tail)}) show a developing {developing} pair, "
                                   f"but it takes 4 confirmed swings in a row to call this a real trend — "
                                   f"still range/sideways until then."}
@@ -355,13 +377,22 @@ def _structure_signal(state):
                 # sequence is visible right below it on the UI — that reads as
                 # contradictory. Name the actual swings and why they don't
                 # qualify (mixed/counter-trend labels in the sequence).
-                return {"status": "trend_intact", "label": "No confirmed trend — range/sideways",
-                        "direction": None,
+                return {"status": "range", "label": "No confirmed trend — range/sideways",
+                        "direction": None, "confirmed_swings": len(state.swings), "required_swings": 4,
                         "detail": f"Recent swings ({' → '.join(tail)}) don't form a clean HH+HL (bullish) "
                                   f"or LH+LL (bearish) run yet — price is contained inside a range, not "
                                   f"trending either way."}
-            return {"status": "trend_intact", "label": "No trend yet", "direction": None,
-                    "detail": "Not enough confirmed swings yet to read any structure."}
+            # tail is empty -> zero swings have been CLASSIFIED yet (the
+            # first swing of each type never gets an HH/HL/LH/LL label,
+            # since _classify_structure needs a prior swing of the same
+            # type to compare against) — this is a session-warmup /
+            # insufficient-data state, not a verdict about the market.
+            return {"status": "forming", "label": "Structure forming — insufficient data",
+                    "direction": None, "confirmed_swings": len(state.swings), "required_swings": 4,
+                    "detail": "Not enough confirmed swings yet to classify this timeframe as trending or "
+                              "ranging — this is NOT a range verdict, just a warm-up period. Needs at "
+                              "least one real HH/HL or LH/LL comparison, which needs a second swing of "
+                              "each type to exist first."}
         return {"status": "trend_intact", "label": f"{state.trend.capitalize()} trend intact — BOS",
                 "direction": state.trend,
                 "detail": "Latest swings continue the existing trend. No counter-trend swing forming."}
@@ -397,6 +428,25 @@ def _trend_start(state):
     return {"i": start["i"], "ts": start["ts"]} if start else None
 
 
+def _abnormal_candle_check(candles, i, lookback=20, multiplier=4.0):
+    """Statistical, not a hardcoded point threshold — flags a candle whose
+    own high-low range is far outside the recent norm (average range over
+    the preceding `lookback` CLOSED candles, never including candle i
+    itself or anything after it). Needs at least `lookback` prior candles
+    to judge against; returns not-abnormal before that since there's no
+    baseline yet (a quiet first half-hour of the session must never get
+    flagged just for lack of history)."""
+    if i < lookback:
+        return False, None, None
+    window = candles[i - lookback:i]
+    ranges = [c["high"] - c["low"] for c in window]
+    avg_range = sum(ranges) / len(ranges) if ranges else 0.0
+    this_range = candles[i]["high"] - candles[i]["low"]
+    if avg_range <= 0:
+        return False, this_range, avg_range
+    return this_range >= avg_range * multiplier, this_range, avg_range
+
+
 def process_candle(state, candle):
     """Feed ONE closed candle. Never looks at candles after `candle` in the
     caller's sequence — this is the no-lookahead guarantee. Returns a small
@@ -404,6 +454,14 @@ def process_candle(state, candle):
     state.candles.append(candle)
     i = len(state.candles) - 1
     config = state.config
+
+    is_abnormal, this_range, avg_range = _abnormal_candle_check(
+        state.candles, i, config.get("abnormal_lookback", 20), config.get("abnormal_multiplier", 4.0))
+    if is_abnormal:
+        state.abnormal_candles.append({
+            "i": i, "ts": candle["ts"], "range": round(this_range, 2), "avg_range": round(avg_range, 2),
+        })
+        state._abnormal_index_set.add(i)
     result = {"new_swing": None, "structure_event": None, "breakout": None,
               "breakdown": None, "retest": None, "fake_breakout": None}
 
@@ -424,6 +482,11 @@ def process_candle(state, candle):
                     "type": kind, "move_pct": move_pct or 0.0,
                     "confirmed_at_i": i, "confirmed_at": candle["ts"],
                     "confirmation_delay": i - check_i,
+                    # A single freak candle shouldn't silently create a swing
+                    # extreme that then drives trend/CHoCH logic — flag it so
+                    # the UI can show a caution badge instead of trusting it
+                    # like any other confirmed swing.
+                    "abnormal": check_i in state._abnormal_index_set,
                 }
                 trend_before = state.trend
                 state.swings.append(swing)
@@ -448,7 +511,7 @@ def process_candle(state, candle):
                         direction = "bearish" if trend_before == "bullish" else "bullish"
                         state.choch_events.append({"i": swing["i"], "ts": swing["ts"], "direction": direction,
                                                     "trigger_level": prior["price"] if prior else None,
-                                                    "price": swing["price"]})
+                                                    "price": swing["price"], "abnormal": swing.get("abnormal", False)})
                         state.possible_reversal = {"direction": direction, "stage": "confirmed",
                                                     "trigger_level": prior["price"] if prior else None}
                         # Trend itself stays whatever _update_trend just computed from the
@@ -521,6 +584,7 @@ def snapshot(state):
         "fake_breakouts": list(state.fake_breakouts[-10:]),
         "bos_events": list(state.bos_events[-10:]),
         "choch_events": list(state.choch_events[-10:]),
+        "abnormal_candles": list(state.abnormal_candles[-10:]),
         "structure_signal": _structure_signal(state),
         "nearest_support": nearest_support["mid"] if nearest_support else None,
         "nearest_resistance": nearest_resistance["mid"] if nearest_resistance else None,
@@ -645,14 +709,26 @@ def multi_timeframe_read(trend_1h, trend_15m, trend_5m):
                       f"Don't jump straight to {side} without waiting for 1H to align too."}
 
 
-def trade_setup_state(mtf, trend_15m, breakouts_15m, breakdowns_15m, retests_15m,
+def trade_setup_state(bias, trend_5m, trend_1h, breakouts_15m, breakdowns_15m, retests_15m,
                        fake_breakouts_15m, choch_events_15m, now_i, data_status="live", window=6):
-    """Deterministic WAIT / WATCHING / SETUP FORMING / STRUCTURE CONFIRMED /
-    INVALIDATED / DATA UNRELIABLE — where you are in the manual decision
-    funnel (1H context -> 15M direction -> 5M timing -> confirmation),
-    never a buy/sell instruction. Built entirely from multi_timeframe_read()'s
-    output plus recent 15M breakout/retest/fake-breakout/CHoCH events — no
-    new inputs, no AI."""
+    """Deterministic WAIT / WATCHING / SETUP FORMING / STRUCTURE CONFIRMED
+    (pending-5M or full) / INVALIDATED / DATA UNRELIABLE — where you are in
+    the manual decision funnel, never a buy/sell instruction.
+
+    Keyed off `bias` (directional_bias — bullish/bearish/neutral), NOT the
+    strict 4-in-a-row trend label. This is the fix for a real design gap:
+    on 2026-09-07, NIFTY produced two real (close-confirmed, non-fake) 15M
+    breakdowns and a confirmed retest, but trend_15m never completed a
+    4-in-a-row LH/LL run in that window, so the old trend_15m-gated version
+    of this function stayed WAIT the entire day despite genuine evidence.
+    The STRUCTURE classification (primary_trend_label/_structure_signal)
+    stays exactly as strict as before — only the TRADE STATE funnel now
+    asks "is there a valid directional bias with real confirming evidence"
+    instead of "has a textbook trend been established". A developing
+    bearish structure backed by a real breakdown+retest can now reach
+    STRUCTURE CONFIRMED without ever needing 4 clean LH/LL swings — it
+    still needs the breakout/breakdown to be CLOSE-based and non-fake, and
+    5M to actually agree, before unlocking option review."""
     if data_status == "stale":
         # A confident-looking trade state built on stale candle data is
         # worse than no state at all — this must outrank every other check.
@@ -660,50 +736,58 @@ def trade_setup_state(mtf, trend_15m, breakouts_15m, breakdowns_15m, retests_15m
                 "why": "Candle data hasn't updated recently — trade-state evaluation is paused until "
                        "fresh data arrives, regardless of what the last-known structure looked like.",
                 "watch_for": "Fresh live candle data before trusting any direction read."}
-    if not mtf:
-        return {"status": "wait", "label": "WAIT", "why": "No read available yet.", "watch_for": ""}
-    action = mtf["action"]
 
-    if action in ("no_entry", "wait_no_setup"):
-        return {"status": "wait", "label": "WAIT", "why": mtf["detail"],
-                "watch_for": "15M to establish a clear HH+HL or LH+LL direction, "
-                             "with 5M able to time an entry off it."}
+    if bias not in ("bullish", "bearish"):
+        # Covers both "forming" (not enough swings yet) and a genuine
+        # directionless range — trade state doesn't need to distinguish
+        # those two; the STRUCTURE card does that instead.
+        return {"status": "wait", "label": "WAIT",
+                "why": "No directional bias yet — 15M structure hasn't leaned either way.",
+                "watch_for": "A developing HH+HL (or LH+LL) pair, or a confirmed 4-swing trend."}
 
-    if action == "wait_counter_move":
-        return {"status": "watching", "label": "WATCHING", "why": mtf["detail"],
-                "watch_for": f"5M to resume {trend_15m} before this becomes a real setup."}
+    direction = bias
 
-    if action in ("wait_pullback", "wait_bounce"):
-        return {"status": "watching", "label": "WATCHING", "why": mtf["detail"],
-                "watch_for": "1H to align with 15M/5M, or a fresh 1H structural shift."}
+    # No time-decay here: once genuinely confirmed, a setup must stay
+    # confirmed until something ACTUALLY invalidates it (a CHoCH, checked
+    # below) or bias itself changes — not merely because N candles passed
+    # with no new event. An earlier version gated this to "within `window`
+    # candles", which meant a real, still-valid confirmed setup would
+    # silently regress back to WATCHING a few candles later for no
+    # structural reason at all — a real regression, caught via the
+    # 2026-09-07 candle-by-candle replay (STRUCTURE CONFIRMED flipped back
+    # to WATCHING at 13:00 even though nothing had changed since the 11:30
+    # retest). `window` is now only used for the fake-breakout freshness
+    # check below, where "how recent" genuinely matters.
+    def most_recent(events):
+        for ev in reversed(events or []):
+            if ev.get("direction") == direction:
+                return ev
+        return None
 
-    # Remaining actions (ce_setup/pe_setup/partial_ce/partial_pe) all mean
-    # 15M and 5M already agree on direction — check whether a real (not
-    # fake) breakout/retest recently backed that up before calling it
-    # "confirmed" rather than just "forming".
-    direction = "bullish" if trend_15m == "bullish" else "bearish"
-
-    def recent(events):
+    def recent_fake(events):
         for ev in reversed(events or []):
             if ev.get("i", -10**9) >= now_i - window and ev.get("direction") == direction:
                 return ev
         return None
 
-    fake = recent(fake_breakouts_15m)
-    breakout_ev = recent(breakouts_15m if direction == "bullish" else breakdowns_15m)
+    fake = recent_fake(fake_breakouts_15m)
+    breakout_ev = most_recent(breakouts_15m if direction == "bullish" else breakdowns_15m)
     retest_ev = None
     for ev in reversed(retests_15m or []):
-        if ev.get("i", -10**9) >= now_i - window and ev.get("direction") == direction and ev.get("result") == "confirmed":
+        if ev.get("direction") == direction and ev.get("result") == "confirmed":
             retest_ev = ev
             break
 
     if fake and not breakout_ev and not retest_ev:
         return {"status": "setup_forming", "label": "SETUP FORMING",
-                "why": f"15M and 5M both {direction}, but the nearest {direction} breakout was a fake "
-                       f"one (level {fake['level']} broke, then failed to hold) — no real confirmation yet.",
+                "why": f"15M bias is {direction}, but the nearest {direction} breakout was a fake one "
+                       f"(level {fake['level']} broke, then failed to hold) — no real confirmation yet.",
                 "watch_for": "A fresh break + close + hold/retest before treating this as confirmed."}
 
-    confirming_ev = retest_ev or breakout_ev
+    # Whichever is MORE RECENT counts as the confirming evidence — a CHoCH
+    # must fire after the latest evidence, not just after whichever of the
+    # two happened to be checked first.
+    confirming_ev = max((e for e in (retest_ev, breakout_ev) if e), key=lambda e: e["i"], default=None)
     if confirming_ev:
         # A structure was confirmed, but has anything broken it SINCE that
         # confirmation? A CHoCH in the opposite direction, fired after the
@@ -723,28 +807,42 @@ def trade_setup_state(mtf, trend_15m, breakouts_15m, breakdowns_15m, retests_15m
                                  f"{opposite} direction instead."}
         confirm_kind = "retest" if retest_ev else ("breakout" if direction == "bullish" else "breakdown")
         confirm_price = confirming_ev.get("zone_mid", confirming_ev.get("price"))
-        return {"status": "structure_confirmed", "label": "STRUCTURE CONFIRMED",
-                "why": f"15M and 5M both {direction}, backed by a real {direction} {confirm_kind} "
-                       f"at {confirm_price}.",
-                "watch_for": "Manually reviewing the option chain is now reasonable — still your decision."}
+        caution = (f" (1H is {trend_1h}, opposing this direction — treat as a lower-confidence setup)"
+                   if trend_1h not in (direction, "sideways") else "")
+        if trend_5m == direction:
+            return {"status": "structure_confirmed", "label": "STRUCTURE CONFIRMED — OPTION REVIEW",
+                    "why": f"15M bias {direction}, backed by a real {direction} {confirm_kind} at "
+                           f"{confirm_price}, and 5M agrees{caution}.",
+                    "watch_for": "Manually reviewing the option chain is now reasonable — still your decision."}
+        return {"status": "structure_confirmed_pending_5m", "label": "WATCH — STRUCTURE CONFIRMED, AWAITING 5M",
+                "why": f"15M bias {direction}, backed by a real {direction} {confirm_kind} at "
+                       f"{confirm_price}, but 5M ({trend_5m}) hasn't confirmed the entry timing yet{caution}.",
+                "watch_for": f"5M to turn {direction} before option review is reasonable."}
 
-    return {"status": "setup_forming", "label": "SETUP FORMING", "why": mtf["detail"],
-            "watch_for": f"A real (close-confirmed, held) {direction} breakout/breakdown or retest "
-                         f"near the nearest zone before treating this as confirmed."}
+    return {"status": "watching", "label": "WATCHING",
+            "why": f"15M bias is {direction}, but no real (close-confirmed, non-fake) breakout/breakdown "
+                   f"or retest has happened yet near the nearest zone.",
+            "watch_for": f"A real {direction} break + close + hold/retest before this becomes a setup."}
 
 
 def primary_trend_label(trend, structure_signal):
-    """Tiered classification the raw trend/sideways label can't express on
-    its own — distinguishes a genuinely directionless range from one where
-    a real (but not yet 4-in-a-row confirmed) HH+HL or LH+LL pair is
-    emerging. Never invents a trend early just to produce a trade — the
-    "developing" tier is explicitly still a form of RANGE, not a trend."""
+    """Tiered STRUCTURE classification the raw trend/sideways label can't
+    express on its own. Never invents a trend early just to produce a
+    trade — "developing" is explicitly still a form of RANGE, not a trend.
+    Tiers: forming (session warm-up, not enough swings to say anything
+    yet — NOT a range verdict), no_trend/RANGE (enough swings exist, but
+    mixed), developing_bullish/bearish, bullish, bearish."""
     if trend in ("bullish", "bearish"):
         return {"tier": trend, "label": trend.upper()}
-    if structure_signal and structure_signal.get("status") == "developing":
+    status = structure_signal.get("status") if structure_signal else None
+    if status == "developing":
         d = structure_signal.get("developing_direction")
         return {"tier": f"developing_{d}", "label": f"DEVELOPING {d.upper()}"}
-    return {"tier": "no_trend", "label": "NO TREND"}
+    if status == "forming":
+        return {"tier": "forming", "label": "FORMING — INSUFFICIENT STRUCTURE",
+                "confirmed_swings": structure_signal.get("confirmed_swings", 0),
+                "required_swings": structure_signal.get("required_swings", 4)}
+    return {"tier": "range", "label": "RANGE"}
 
 
 def directional_bias(trend, primary_trend):
@@ -758,15 +856,22 @@ def directional_bias(trend, primary_trend):
     return "neutral"
 
 
-def market_state(trend, current_price, support, resistance):
+def market_state(trend, current_price, support, resistance, structure_signal=None):
     """Single top-line "where are we" read for the primary (15M) timeframe —
     names the current price's position relative to the nearest confirmed
     support/resistance, or the trend if one is established. Never a
-    prediction, just an orientation statement."""
+    prediction, just an orientation statement. Distinguishes FORMING
+    (session warm-up, not enough swings to say anything) from RANGE
+    (enough data exists, it's genuinely mixed) — conflating the two would
+    make a 1st-candle session read exactly like an actual range verdict."""
     if trend in ("bullish", "bearish"):
         return {"state": trend, "label": trend.upper(),
                 "detail": f"15M structure is {trend} — the baseline read is to favor this direction, "
                           f"not fight it."}
+    if structure_signal and structure_signal.get("status") == "forming":
+        return {"state": "forming", "label": "STRUCTURE FORMING",
+                "detail": "Not enough confirmed swings yet to classify this session as trending or "
+                          "ranging — this is a warm-up period, not a range verdict."}
     if current_price is not None and support is not None and resistance is not None:
         return {"state": "range", "label": "RANGE / WAIT",
                 "detail": f"Price ({current_price}) is between support ({support}) and resistance "
