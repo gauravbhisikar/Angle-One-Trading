@@ -856,18 +856,31 @@ def directional_bias(trend, primary_trend):
     return "neutral"
 
 
-def market_state(trend, current_price, support, resistance, structure_signal=None):
+def market_state(trend, current_price, support, resistance, structure_signal=None, setup_status=None):
     """Single top-line "where are we" read for the primary (15M) timeframe —
     names the current price's position relative to the nearest confirmed
     support/resistance, or the trend if one is established. Never a
     prediction, just an orientation statement. Distinguishes FORMING
     (session warm-up, not enough swings to say anything) from RANGE
     (enough data exists, it's genuinely mixed) — conflating the two would
-    make a 1st-candle session read exactly like an actual range verdict."""
+    make a 1st-candle session read exactly like an actual range verdict.
+
+    Also: a plain "BEARISH"/"BULLISH" headline is the single most visually
+    dominant thing on this card — it must not claim more certainty than the
+    actual trade-state funnel has earned. trend_15m can be strictly
+    confirmed (4-in-a-row) while 5M still hasn't lined up (setup_status ==
+    "structure_confirmed_pending_5m", or bias exists with no confirming
+    break yet) — in that case this says "LEANING X — AWAITING 5M" instead
+    of a bare "BEARISH", so the boldest text on the page never outruns
+    what TRADE STATE below it actually says."""
     if trend in ("bullish", "bearish"):
-        return {"state": trend, "label": trend.upper(),
-                "detail": f"15M structure is {trend} — the baseline read is to favor this direction, "
-                          f"not fight it."}
+        if setup_status == "structure_confirmed":
+            return {"state": trend, "label": trend.upper(),
+                    "detail": f"15M structure is {trend} and 5M has confirmed entry timing — the full "
+                              f"funnel agrees; the baseline read is to favor this direction, not fight it."}
+        return {"state": trend, "label": f"LEANING {trend.upper()} — AWAITING 5M",
+                "detail": f"15M structure is confirmed {trend}, but 5M entry timing hasn't lined up yet — "
+                          f"not yet the full picture. See TRADE STATE below before treating this as settled."}
     if structure_signal and structure_signal.get("status") == "forming":
         return {"state": "forming", "label": "STRUCTURE FORMING",
                 "detail": "Not enough confirmed swings yet to classify this session as trending or "

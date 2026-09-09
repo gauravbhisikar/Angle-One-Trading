@@ -1616,7 +1616,7 @@ def build_trend():
         len(out["candles_15m"]) - 1, data_status=data_status)
     out["market_state"] = trend_engine.market_state(
         out["trend_15m"], current_price, out["nearest_support_15m"], out["nearest_resistance_15m"],
-        out["structure_signal_15m"])
+        out["structure_signal_15m"], out["setup_state"]["status"])
     out["watch_conditions"] = trend_engine.watch_conditions(
         out["trend_15m"], out["nearest_support_15m"], out["nearest_resistance_15m"], out["invalidation_level_15m"])
     out["risk_levels"] = (trend_engine.risk_levels(

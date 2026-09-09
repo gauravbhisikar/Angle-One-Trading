@@ -580,6 +580,11 @@
   .sig-legend-row { font-size: 10.5px; color: var(--faint); line-height: 1.5; }
   .sig-legend-row b { color: var(--muted); }
   .sig-legend-note { font-style: italic; margin-top: 2px; }
+  .sig-progress { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); }
+  .sig-progress-label { font-size: 10.5px; color: var(--muted); margin-bottom: 5px; }
+  .sig-progress-bar { height: 5px; border-radius: 3px; background: var(--surface2); overflow: hidden; }
+  .sig-progress-fill { height: 100%; background: var(--amber); border-radius: 3px; }
+  .sig-progress-note { font-size: 10.5px; color: var(--faint); margin-top: 6px; line-height: 1.5; font-style: italic; }
   .chart-legend {
     display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; padding-top: 10px;
     border-top: 1px solid var(--line); font-size: 10.5px; color: var(--muted);
@@ -1540,6 +1545,16 @@ function trendStatusHTML(d) {
       <span class="mtf-verdict-label">${tfLabel} STRUCTURE SIGNAL (BOS / CHoCH / PULLBACK)</span>
       <span class="mtf-verdict-text">${sigEmoji} ${esc(sig.label)}</span>
       <div class="mtf-verdict-detail">${esc(sig.detail)}</div>
+      ${sig.status === "forming" && sig.required_swings ? `
+      <div class="sig-progress">
+        <div class="sig-progress-label">Confirmed swings so far: ${sig.confirmed_swings} · first label needs at least 2</div>
+        <div class="sig-progress-bar"><div class="sig-progress-fill" style="width:${Math.min(100, (sig.confirmed_swings / 2) * 100)}%"></div></div>
+        <div class="sig-progress-note">This is elapsed swings, not elapsed time — ${tfLabel} needs at least 7 closed candles before the FIRST swing can even confirm, and a second same-type swing after that before any HH/HL/LH/LL label appears. On a fresh deploy, 1H can take most of a trading day; 15M a few hours; 5M around an hour.</div>
+      </div>` : ""}
+      ${(sig.status === "range" || sig.status === "developing") ? `
+      <div class="sig-progress">
+        <div class="sig-progress-note">Not stuck — swings keep accumulating (${sig.confirmed_swings} confirmed so far) as structure evolves; what's missing is a CLEAN run of ${sig.required_swings} in a row (all HH/HL, or all LH/LL). That's what flips this from range/developing into a confirmed BULLISH/BEARISH trend.</div>
+      </div>` : ""}
       <div class="sig-legend">
         <div class="sig-legend-row"><b>✅ BOS</b> (Break of Structure) — latest confirmed swing continued the existing trend (LH/LL while bearish, HH/HL while bullish). Nothing challenged it. Safest state.</div>
         <div class="sig-legend-row"><b>👀 Possible CHoCH forming</b> — a counter-trend swing appeared (e.g. a higher low inside a bearish trend). Early warning only — still just a pullback/bounce, trend hasn't changed.</div>
