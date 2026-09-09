@@ -409,6 +409,57 @@ def _structure_signal(state):
                       f"through {r['trigger_level']}."}
 
 
+def classify_label_tail(tail):
+    """Pure last-4-labels classification — the exact rule _update_trend
+    uses internally on a live TrendState, exposed standalone so a caller
+    can classify an arbitrary (e.g. date-filtered) label sequence without
+    a full TrendState. Returns "bullish"/"bearish"/"sideways"."""
+    bullish = len(tail) >= 2 and all(t in ("HH", "HL") for t in tail) and "HH" in tail and "HL" in tail
+    bearish = len(tail) >= 2 and all(t in ("LH", "LL") for t in tail) and "LH" in tail and "LL" in tail
+    if bullish:
+        return "bullish"
+    if bearish:
+        return "bearish"
+    return "sideways"
+
+
+def today_structure_signal(today_labels, today_swings_count):
+    """Same forming/range/developing shape as _structure_signal, but for
+    day-trading: scoped to ONLY today's labels, so a trend that started
+    days ago (and has long since been fully priced in) doesn't keep
+    reading as "today's trend" just because the underlying TrendState
+    persists across the server's uptime rather than resetting daily.
+    trend_engine stays wall-clock-free by design — the caller (app.py)
+    does the date filtering and hands in an already-scoped label list."""
+    tail = today_labels[-4:]
+    last2 = today_labels[-2:]
+    developing = None
+    if set(last2) == {"HH", "HL"}:
+        developing = "bullish"
+    elif set(last2) == {"LH", "LL"}:
+        developing = "bearish"
+    today_trend = classify_label_tail(tail)
+    if developing and today_trend == "sideways":
+        return {"status": "developing", "direction": None, "developing_direction": developing,
+                "confirmed_swings": today_swings_count, "required_swings": 4,
+                "label": f"Today — developing {developing} sequence",
+                "detail": f"Today's swings ({' → '.join(tail)}) show a developing {developing} pair, but it "
+                          f"takes 4 confirmed swings in a row (today) to call this a real intraday trend."}
+    if today_trend in ("bullish", "bearish"):
+        return {"status": "trend_intact", "direction": today_trend, "developing_direction": None,
+                "label": f"Today {today_trend.upper()} — BOS",
+                "detail": f"Today's swings continue a {today_trend} run — no counter-trend swing forming today."}
+    if tail:
+        return {"status": "range", "direction": None, "developing_direction": None,
+                "confirmed_swings": today_swings_count, "required_swings": 4,
+                "label": "Today — range/sideways",
+                "detail": f"Today's swings ({' → '.join(tail)}) don't form a clean HH+HL or LH+LL run yet."}
+    return {"status": "forming", "direction": None, "developing_direction": None,
+            "confirmed_swings": today_swings_count, "required_swings": 4,
+            "label": "Today — structure forming",
+            "detail": "Not enough of today's own swings confirmed yet to read intraday structure."}
+
+
 def _trend_start(state):
     """Where the CURRENT trend run began: walks backward through
     structure_detail while events keep matching the current trend's
@@ -576,6 +627,7 @@ def snapshot(state):
         "trend_start": _trend_start(state),
         "reversal": state.possible_reversal,
         "structure_sequence": list(state.structure_sequence[-12:]),
+        "structure_detail": list(state.structure_detail[-30:]),  # {"label","i","ts"} per event — "i" is a candle index, lets callers date-filter (e.g. "today only") without trend_engine itself needing wall-clock awareness
         "swings": [dict(s) for s in state.swings[-30:]],
         "zones": [zone_out(z) for z in ranked_zones],
         "breakouts": list(state.breakouts[-10:]),

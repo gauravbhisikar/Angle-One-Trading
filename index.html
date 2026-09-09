@@ -552,6 +552,7 @@
   .mtf-card:hover { box-shadow: var(--elev-1); transform: translateY(-1px); }
   .mtf-card-tf { font-size: 11px; font-weight: 700; font-family: var(--mono); color: var(--muted); }
   .mtf-card-role { font-size: 9.5px; color: var(--faint); margin: 2px 0 5px; line-height: 1.3; }
+  .mtf-card-scope { font-size: 8.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .4px; margin-top: 3px; }
   .mtf-card-val { font-size: 13px; font-weight: 700; }
   .mtf-card.up .mtf-card-val { color: var(--up); }
   .mtf-card.down .mtf-card-val { color: var(--down); }
@@ -1234,7 +1235,14 @@ function trendStatusHTML(d) {
     </div>` : "";
   const tf = currentTrendTf;
   const tfLabel = tf.toUpperCase();
-  const trend = d[`trend_${tf}`] || "sideways";
+  // 15M/5M are the two timeframes that actually drive today's trade
+  // decision, so they read TODAY's session only (today_trend_*) — a
+  // multi-day-old "bearish" carried over from 3 days ago must not answer
+  // "is it PE or CE today". 1H stays the full multi-day CONTEXT read,
+  // matching its documented role (broader market direction, not today's
+  // specific setup).
+  const todayAwareTrend = (t) => t === "1h" ? (d.trend_1h || "sideways") : (d[`today_trend_${t}`] || "sideways");
+  const trend = todayAwareTrend(tf);
   const cls = trend === "bullish" ? "up" : trend === "bearish" ? "down" : "flat";
   const emoji = d.reversal ? "⚠️" : trend === "bullish" ? "🟢" : trend === "bearish" ? "🔴" : "🟡";
   const label = d.reversal ? "POSSIBLE REVERSAL" : trend.toUpperCase();
@@ -1258,13 +1266,15 @@ function trendStatusHTML(d) {
     "5m": { tag: "ENTRY TIMING", q: "Has the move actually started?" },
   };
   const tfPill = (t) => {
-    const tt = d[`trend_${t}`] || "sideways";
+    const tt = todayAwareTrend(t);
     const tcls = tt === "bullish" ? "up" : tt === "bearish" ? "down" : "flat";
     const temoji = tt === "bullish" ? "🟢" : tt === "bearish" ? "🔴" : "🟡";
-    return `<div class="mtf-card ${tcls} ${t === tf ? "mtf-active" : ""}" data-tf="${t}" title="Click to switch the structure/events detail panel below to ${t.toUpperCase()} — the three charts always show all timeframes at once">
+    const scopeNote = t === "1h" ? "multi-day context" : "today only";
+    return `<div class="mtf-card ${tcls} ${t === tf ? "mtf-active" : ""}" data-tf="${t}" title="Click to switch the structure/events detail panel below to ${t.toUpperCase()} (${scopeNote}) — the three charts always show all timeframes at once">
       <div class="mtf-card-tf">${t.toUpperCase()} · ${TF_ROLE[t].tag}</div>
       <div class="mtf-card-role">${TF_ROLE[t].q}</div>
       <div class="mtf-card-val">${temoji} ${esc(tt.toUpperCase())}</div>
+      <div class="mtf-card-scope">${scopeNote}</div>
     </div>`;
   };
   const mtf = d.mtf_read;
@@ -1499,7 +1509,11 @@ function trendStatusHTML(d) {
     </div>`;
   };
 
-  const sig = d[`structure_signal_${tf}`];
+  // 15M's structure signal is TODAY-scoped (the actual decision-driving
+  // read); 5M/1H still show their own (continuous) structure_signal, which
+  // remains informative context even though only 15M/5M's trend feed the
+  // trade decision.
+  const sig = tf === "15m" ? d.today_structure_signal_15m : d[`structure_signal_${tf}`];
   const sigCls = sig && sig.direction === "bullish" ? "up" : sig && sig.direction === "bearish" ? "down" : "flat";
   const SIG_EMOJI = { choch_confirmed: "🔄", pullback_watch: "👀", forming: "⏳", range: "➖", developing: "👀" };
   const sigEmoji = (sig && SIG_EMOJI[sig.status]) || "✅";
@@ -1579,7 +1593,7 @@ function trendStatusHTML(d) {
       <div class="mtf-verdict-detail">This candle's range is far outside the recent norm for ${tfLabel} — could be a genuine sharp move or a data glitch. Any swing/breakout/CHoCH this candle alone produced is flagged, not suppressed — use judgment before treating it as confirmed structure.</div>
     </div>` : ""}
     <div class="trend-grid">
-      <div title="Sequence of confirmed swing highs/lows on ${tfLabel} candles — HH/HL = higher high/higher low (bullish), LH/LL = lower high/lower low (bearish)"><span class="tg-label">${tfLabel} STRUCTURE</span><span class="tg-val">${(d[`structure_sequence_${tf}`] || []).join(" → ") || "—"}</span></div>
+      <div title="Sequence of confirmed swing highs/lows on ${tfLabel} candles — HH/HL = higher high/higher low (bullish), LH/LL = lower high/lower low (bearish). ${tf === "1h" ? "Multi-day context." : "Today's session only — resets each day."}"><span class="tg-label">${tfLabel} STRUCTURE ${tf !== "1h" ? "(TODAY)" : ""}</span><span class="tg-val">${(tf === "1h" ? (d[`structure_sequence_${tf}`] || []) : (d[`today_labels_${tf}`] || [])).join(" → ") || "—"}</span></div>
       <div title="Nearest price zone below current price where buyers have repeatedly stepped in (clustered swing lows), on ${tfLabel}"><span class="tg-label">NEAREST SUPPORT</span><span class="tg-val up">${d[`nearest_support_${tf}`] != null ? fmtPrice(d[`nearest_support_${tf}`]) : "—"}</span></div>
       <div title="Nearest price zone above current price where sellers have repeatedly capped it (clustered swing highs), on ${tfLabel}"><span class="tg-label">NEAREST RESISTANCE</span><span class="tg-val down">${d[`nearest_resistance_${tf}`] != null ? fmtPrice(d[`nearest_resistance_${tf}`]) : "—"}</span></div>
       <div title="The price level that would undo the current ${tfLabel} trend read if broken — the most recent confirmed swing this trend rests on"><span class="tg-label">INVALIDATION LEVEL</span><span class="tg-val">${d[`invalidation_level_${tf}`] != null ? fmtPrice(d[`invalidation_level_${tf}`]) : "—"}</span></div>

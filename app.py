@@ -1587,6 +1587,7 @@ def build_trend():
         out[f"bos_events_{tf}"] = s["bos_events"]
         out[f"choch_events_{tf}"] = s["choch_events"]
         out[f"abnormal_candles_{tf}"] = s["abnormal_candles"]
+        out[f"structure_detail_{tf}"] = s["structure_detail"]
         out[f"structure_signal_{tf}"] = s["structure_signal"]
         out[f"nearest_support_{tf}"] = s["nearest_support"]
         out[f"nearest_resistance_{tf}"] = s["nearest_resistance"]
@@ -1598,9 +1599,50 @@ def build_trend():
     out["nearest_support"] = out["nearest_support_15m"]
     out["nearest_resistance"] = out["nearest_resistance_15m"]
     out["invalidation_level"] = out["invalidation_level_15m"]
-    out["mtf_read"] = trend_engine.multi_timeframe_read(out["trend_1h"], out["trend_15m"], out["trend_5m"])
-    out["primary_trend"] = trend_engine.primary_trend_label(out["trend_15m"], out["structure_signal_15m"])
-    out["directional_bias"] = trend_engine.directional_bias(out["trend_15m"], out["primary_trend"])
+    # --- Day-trading scoping ------------------------------------------------
+    # TrendState is persistent across the server's whole uptime (it never
+    # resets daily) — a "BEARISH" read could be 3 days old. For an intraday
+    # decision that's the wrong question; what matters is TODAY's session
+    # only. trend_engine itself stays wall-clock-free by design, so the date
+    # filtering happens here: structure_detail/swings/events all carry a
+    # candle index ("i"), and candles_{tf}[i]["date"] tells us which day that
+    # candle fell on — no epoch/timezone math needed, just an index compare.
+    # 1H is deliberately EXCLUDED from this — it only has ~6 candles in a
+    # whole trading day (nowhere near enough for its own swings to form), and
+    # its documented role is broader multi-day CONTEXT anyway, not today's
+    # decision. 15M (primary direction) and 5M (entry timing) — the two
+    # timeframes that actually drive setup_state/directional_bias — ARE
+    # rescoped to today only.
+    today_date = ist_now().date().isoformat()
+
+    def _today_start_i(candles):
+        for i, c in enumerate(candles):
+            if c["date"][:10] == today_date:
+                return i
+        return len(candles)  # no candles today yet -> every "today" slice below is empty, correctly
+
+    def _today_events(events, start_i):
+        return [e for e in events if e.get("i", -1) >= start_i]
+
+    today_start_i_15m = _today_start_i(out["candles_15m"])
+    today_labels_15m = [ev["label"] for ev in out["structure_detail_15m"] if ev["i"] >= today_start_i_15m]
+    today_swings_15m = sum(1 for sw in out["swings_15m"] if sw["i"] >= today_start_i_15m)
+    today_trend_15m = trend_engine.classify_label_tail(today_labels_15m[-4:])
+    today_sig_15m = trend_engine.today_structure_signal(today_labels_15m, today_swings_15m)
+
+    today_start_i_5m = _today_start_i(out["candles_5m"])
+    today_labels_5m = [ev["label"] for ev in out["structure_detail_5m"] if ev["i"] >= today_start_i_5m]
+    today_trend_5m = trend_engine.classify_label_tail(today_labels_5m[-4:])
+
+    out["today_trend_15m"] = today_trend_15m
+    out["today_trend_5m"] = today_trend_5m
+    out["today_labels_15m"] = today_labels_15m
+    out["today_labels_5m"] = today_labels_5m
+    out["today_structure_signal_15m"] = today_sig_15m
+
+    out["mtf_read"] = trend_engine.multi_timeframe_read(out["trend_1h"], today_trend_15m, today_trend_5m)
+    out["primary_trend"] = trend_engine.primary_trend_label(today_trend_15m, today_sig_15m)
+    out["directional_bias"] = trend_engine.directional_bias(today_trend_15m, out["primary_trend"])
     # Trade state is keyed off directional_bias (bullish/bearish/neutral),
     # NOT the raw trend_15m sideways gate — a "developing" structure
     # (see primary_trend_label) already carries a real bias and, backed by
@@ -1609,16 +1651,21 @@ def build_trend():
     # See trade_setup_state's docstring for the exact incident this fixed
     # (2026-09-07: two real breakdowns + a confirmed retest, but trend_15m
     # never left "sideways" in that window under the old trend-gated logic).
+    # Events are filtered to TODAY ONLY too — a breakdown from 3 days ago
+    # shouldn't be able to confirm today's setup either.
     out["setup_state"] = trend_engine.trade_setup_state(
-        out["directional_bias"], out["trend_5m"], out["trend_1h"],
-        out["breakouts_15m"], out["breakdowns_15m"],
-        out["retests_15m"], out["fake_breakouts_15m"], out["choch_events_15m"],
+        out["directional_bias"], today_trend_5m, out["trend_1h"],
+        _today_events(out["breakouts_15m"], today_start_i_15m),
+        _today_events(out["breakdowns_15m"], today_start_i_15m),
+        _today_events(out["retests_15m"], today_start_i_15m),
+        _today_events(out["fake_breakouts_15m"], today_start_i_15m),
+        _today_events(out["choch_events_15m"], today_start_i_15m),
         len(out["candles_15m"]) - 1, data_status=data_status)
     out["market_state"] = trend_engine.market_state(
-        out["trend_15m"], current_price, out["nearest_support_15m"], out["nearest_resistance_15m"],
-        out["structure_signal_15m"], out["setup_state"]["status"])
+        today_trend_15m, current_price, out["nearest_support_15m"], out["nearest_resistance_15m"],
+        today_sig_15m, out["setup_state"]["status"])
     out["watch_conditions"] = trend_engine.watch_conditions(
-        out["trend_15m"], out["nearest_support_15m"], out["nearest_resistance_15m"], out["invalidation_level_15m"])
+        today_trend_15m, out["nearest_support_15m"], out["nearest_resistance_15m"], out["invalidation_level_15m"])
     out["risk_levels"] = (trend_engine.risk_levels(
         out["directional_bias"], current_price, out["nearest_support_15m"],
         out["nearest_resistance_15m"], out["invalidation_level_15m"])
@@ -1906,12 +1953,15 @@ class Handler(BaseHTTPRequestHandler):
                             "reversal": None, "config": {}, "mtf_read": None, "setup_state": None,
                             "market_state": None, "watch_conditions": None,
                             "primary_trend": None, "directional_bias": None, "risk_levels": None,
+                            "today_trend_15m": None, "today_trend_5m": None,
+                            "today_labels_15m": [], "today_labels_5m": [], "today_structure_signal_15m": None,
                             "nearest_support": None, "nearest_resistance": None, "invalidation_level": None,
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
                     for tf in TREND_TIMEFRAMES:
                         snap.update({
                             f"trend_{tf}": None, f"trend_start_{tf}": None,
-                            f"structure_sequence_{tf}": [], f"swings_{tf}": [], f"zones_{tf}": [],
+                            f"structure_sequence_{tf}": [], f"structure_detail_{tf}": [],
+                            f"swings_{tf}": [], f"zones_{tf}": [],
                             f"breakouts_{tf}": [], f"breakdowns_{tf}": [], f"retests_{tf}": [],
                             f"fake_breakouts_{tf}": [], f"bos_events_{tf}": [], f"choch_events_{tf}": [],
                             f"abnormal_candles_{tf}": [], f"structure_signal_{tf}": None,
