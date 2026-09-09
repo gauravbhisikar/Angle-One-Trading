@@ -126,22 +126,33 @@
   button.refresh:hover { border-color: var(--accent); color: var(--accent); }
   button.refresh:disabled { opacity: .5; cursor: wait; }
 
+  /* Global market strip — persistent context across every section (lives
+     in <header>, outside the per-tab panels, so it never disappears when
+     switching Analysis/News/Trend/Option Chain). Was previously the same
+     background as the page body at 11px — visually indistinguishable from
+     "not there". This is meant to be the single most persistently visible
+     piece of the whole product, so it gets real visual weight: a distinct
+     surface, a bold accent top-border, and a value size that reads at a
+     glance instead of requiring a close look. */
   .tape {
     display: flex; gap: 0; overflow-x: auto; white-space: nowrap;
-    border-top: 1px solid var(--line);
+    border-top: 2px solid var(--accent);
+    border-bottom: 1px solid var(--line);
     font-family: var(--mono);
-    background: var(--bg);
+    background: var(--surface2);
     scrollbar-width: none;
   }
   .tape::-webkit-scrollbar { display: none; }
   .tape .tt {
-    display: flex; align-items: baseline; gap: 8px;
-    padding: 6px 18px; border-right: 1px solid var(--line);
-    font-size: 11px;
+    display: flex; align-items: center; gap: 9px;
+    padding: 10px 20px; border-right: 1px solid var(--line);
   }
-  .tape .tt .ts { color: var(--muted); font-weight: 600; letter-spacing: .8px; }
-  .tape .tt .tv { color: var(--text); font-weight: 600; }
-  .tape .tt .tc { font-weight: 600; }
+  .tape .tt .ts { color: var(--faint); font-weight: 700; letter-spacing: .8px; font-size: 10px; text-transform: uppercase; }
+  .tape .tt .tv { color: var(--text); font-weight: 700; font-size: 16px; }
+  .tape .tt .tc { font-weight: 700; font-size: 12.5px; padding: 2px 7px; border-radius: 5px; }
+  .tape .tt .tc.up   { color: var(--up);   background: var(--up-bg); }
+  .tape .tt .tc.down { color: var(--down); background: var(--down-bg); }
+  .tape .tt .tc.flat { color: var(--muted); background: var(--surface); }
 
   /* ---- App shell: persistent left sidebar + fluid main column ---- */
   .app-shell { display: flex; align-items: flex-start; min-height: 100vh; }
