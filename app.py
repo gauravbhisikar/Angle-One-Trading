@@ -1493,6 +1493,32 @@ def _paper_find_option_row(strike, side):
     return None
 
 
+def _paper_available_options():
+    """Every live strike+side from the currently-cached option chain, for
+    the frontend's searchable strike dropdown — the user picks from real,
+    currently-tradeable contracts only, never types an arbitrary strike.
+    Only one expiry is ever cached (build_option_chain always takes the
+    nearest weekly, expiries[0]) so "nearest available expiry" is already
+    automatic — there's nothing else to choose from."""
+    with CACHE_LOCK:
+        oc = dict(CACHE.get("option_chain") or {})
+    if not oc:
+        return {"expiry": None, "lot_size": None, "ce": [], "pe": []}
+    ce, pe = [], []
+    for row in oc.get("rows") or []:
+        for side, bucket in (("ce", ce), ("pe", pe)):
+            d = row.get(side)
+            if d and d.get("ltp") is not None:
+                bucket.append({
+                    "strike": row["strike"], "ltp": d["ltp"], "delta": d.get("delta"),
+                    "iv": d.get("iv"), "oi": d.get("oi"), "oi_chg": d.get("oi_chg"),
+                    "volume": d.get("volume"), "bid": d.get("bid"), "ask": d.get("ask"),
+                })
+    ce.sort(key=lambda r: r["strike"])
+    pe.sort(key=lambda r: r["strike"])
+    return {"expiry": oc.get("expiry"), "lot_size": oc.get("lot_size"), "ce": ce, "pe": pe}
+
+
 def _paper_entry_snapshot():
     """Compact dashboard-state snapshot captured at the moment of entry —
     the whole point being able to later ask "did CONFIRMED trades actually
@@ -2128,6 +2154,7 @@ class Handler(BaseHTTPRequestHandler):
                 "today_trades": today_trades, "recent_log": recent_log,
                 "max_open_positions": paper_trading.MAX_OPEN_POSITIONS,
                 "daily_capital": paper_trading.DAILY_CAPITAL,
+                "available_options": _paper_available_options(),
                 "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
             }).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")

@@ -582,6 +582,21 @@
   .paper-log-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
   .paper-log-table th { text-align: left; padding: 8px 10px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--line); }
   .paper-log-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  .paper-subnav { display: flex; gap: 6px; margin: 4px 0 16px; border-bottom: 1px solid var(--line); }
+  .paper-subtab {
+    background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 14px;
+    font-size: 12.5px; font-weight: 600; color: var(--muted); cursor: pointer;
+  }
+  .paper-subtab:hover { color: var(--text); }
+  .paper-subtab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .paper-eod-badge {
+    display: inline-block; margin-left: 8px; font-size: 10px; font-weight: 700; letter-spacing: .3px;
+    padding: 2px 8px; border-radius: 999px; background: var(--up-bg); color: var(--up);
+  }
+  .paper-review-card { margin: 10px 0 14px; padding: 12px 14px; border-radius: 10px; background: var(--surface2); border: 1px solid var(--line); }
+  .paper-review-head { font-size: 12.5px; font-weight: 700; margin-bottom: 8px; }
+  .paper-review-summary { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.6; }
+  .paper-invalid-strike { color: var(--down); font-style: normal; }
   .risk-item { display: flex; flex-direction: column; gap: 3px; }
   .risk-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: var(--faint); font-weight: 700; }
   .risk-val { font-size: 15px; font-weight: 700; font-family: var(--mono); }
@@ -888,10 +903,21 @@
 
   <div id="panel-paper" class="hidden">
     <div id="paperAccount"></div>
-    <div id="paperOpenPosition"></div>
-    <div id="paperNewTrade"></div>
-    <div id="paperAnalysis"></div>
-    <div id="paperLog"></div>
+    <div class="paper-subnav">
+      <button class="paper-subtab active" data-sub="open">Open</button>
+      <button class="paper-subtab" data-sub="log">Trade Log</button>
+      <button class="paper-subtab" data-sub="analysis">30-Day Analysis</button>
+    </div>
+    <div id="paperSubOpen">
+      <div id="paperOpenPosition"></div>
+      <div id="paperNewTrade"></div>
+    </div>
+    <div id="paperSubLog" class="hidden">
+      <div id="paperLog"></div>
+    </div>
+    <div id="paperSubAnalysis" class="hidden">
+      <div id="paperAnalysis"></div>
+    </div>
   </div>
 </main>
 <footer>Free data sources: Finnhub · Twelve Data · Alpha Vantage · NSE · Yahoo Finance · TradingView · Angel One. For reference only — not investment advice.</footer>
@@ -2256,7 +2282,8 @@ function paperAccountHTML(s) {
       <div class="risk-item ${pnlCls}"><span class="risk-tag">TOTAL P&amp;L</span><span class="risk-val ${pnlCls}">₹${a.total_pnl.toLocaleString("en-IN")} (${a.return_pct}%)</span></div>
       <div class="risk-item"><span class="risk-tag">EQUITY</span><span class="risk-val">₹${a.equity.toLocaleString("en-IN")}</span></div>
     </div>
-    <div class="bias-note">Today: ${a.trades_today} trade${a.trades_today === 1 ? "" : "s"} · ${a.wins_today}W / ${a.losses_today}L. Max ${s.max_open_positions} open position at a time in V1 — long-only BUY CE/BUY PE, no futures/spreads/selling/automation.</div>
+    <div class="bias-note">Today: ${a.trades_today} trade${a.trades_today === 1 ? "" : "s"} · ${a.wins_today}W / ${a.losses_today}L. Max ${s.max_open_positions} open position at a time in V1 — long-only BUY CE/BUY PE, no futures/spreads/selling/automation.
+    <span class="paper-eod-badge">🔒 AUTO EOD CLOSE: ENABLED</span> — never left open overnight, any open position is force-closed at 15:30 IST.</div>
   </div>`;
 }
 
@@ -2285,27 +2312,41 @@ const PAPER_CHECKLIST_ITEMS = [
   ["5m_confirm", "5M entry confirmation"], ["choch", "CHoCH (counter-trend — note why anyway)"],
 ];
 
+let _paperOptions = { expiry: null, lot_size: null, ce: [], pe: [] };
+
+function paperStrikeOptionsHTML(side) {
+  const list = (_paperOptions[side.toLowerCase()] || []);
+  return list.map(o => `<option value="${o.strike}">${o.strike} ${side} — LTP ₹${o.ltp}</option>`).join("");
+}
+
 function paperNewTradeFormHTML(s) {
   if (s.open_position) return ""; // max 1 open position in V1 — form only shows when slot is free
   const pf = _paperPrefill || { strike: "", side: "CE" };
   const checklistRows = PAPER_CHECKLIST_ITEMS.map(([id, label]) =>
     `<label class="paper-check-row"><input type="checkbox" id="pchk_${id}"> ${esc(label)}</label>`).join("");
+  const noOptions = !(_paperOptions.ce.length || _paperOptions.pe.length);
   return `
   <div class="bias flat">
     <div class="msc-label">NEW PAPER TRADE</div>
+    ${noOptions ? `<div class="bias-note">Live option chain not loaded yet — open the Option Chain tab once, or wait a moment, then come back.</div>` : `
     <div class="paper-form-row">
-      <label>Side<select id="paperSide">
+      <label>Side<select id="paperSide" onchange="paperOnSideChange()">
         <option value="CE" ${pf.side === "CE" ? "selected" : ""}>BUY CE</option>
         <option value="PE" ${pf.side === "PE" ? "selected" : ""}>BUY PE</option>
       </select></label>
-      <label>Strike<input type="number" id="paperStrike" value="${pf.strike}" step="50" placeholder="e.g. 24000"></label>
-      <label>Lots<input type="number" id="paperLots" value="1" min="1" step="1" style="width:60px"></label>
+      <label>Strike (search from live chain — no typing arbitrary strikes)
+        <input list="paperStrikeList" id="paperStrike" value="${pf.strike}" placeholder="Type to search..." oninput="paperOnStrikeChange()" autocomplete="off">
+        <datalist id="paperStrikeList">${paperStrikeOptionsHTML(pf.side)}</datalist>
+      </label>
+      <label>Lots<input type="number" id="paperLots" value="1" min="1" step="1" style="width:60px" oninput="paperOnStrikeChange()"></label>
     </div>
+    <div id="paperOptionDetails"></div>
     <div class="paper-why-label">Why are you entering? (not enforced — for your own review later)</div>
     <div class="paper-checklist">${checklistRows}</div>
     <textarea id="paperNotes" placeholder="Notes (optional)" class="paper-notes"></textarea>
     <div id="paperFormError" class="errbanner" style="display:none;"></div>
-    <button class="refresh" onclick="paperOpen()">Confirm Paper Buy</button>
+    <button class="refresh" id="paperBuyBtn" onclick="paperOpen()" disabled>Confirm Paper Buy</button>
+    `}
   </div>`;
 }
 
@@ -2363,10 +2404,12 @@ async function loadPaper() {
     const res = await fetch("/api/paper/state", { cache: "no-store" });
     const s = await res.json();
     paperLoaded = true;
+    _paperOptions = s.available_options || { expiry: null, lot_size: null, ce: [], pe: [] };
     document.getElementById("tabCountP").textContent = s.open_position ? "1" : "0";
     document.getElementById("paperAccount").innerHTML = paperAccountHTML(s);
     document.getElementById("paperOpenPosition").innerHTML = paperOpenPositionHTML(s);
     document.getElementById("paperNewTrade").innerHTML = paperNewTradeFormHTML(s);
+    paperOnStrikeChange(); // initialize details/review for whatever value the form rendered with (prefill or blank)
     document.getElementById("paperLog").innerHTML = paperLogHTML(s);
     const ares = await fetch("/api/paper/analysis", { cache: "no-store" });
     const a = await ares.json();
@@ -2374,6 +2417,54 @@ async function loadPaper() {
   } catch (e) {
     document.getElementById("paperAccount").innerHTML = `<div class="errbanner">Could not load paper trading — ${esc(e.message)}</div>`;
   }
+}
+
+function paperFindOption(side, strike) {
+  return (_paperOptions[side.toLowerCase()] || []).find(o => Math.abs(o.strike - strike) < 0.01) || null;
+}
+
+function paperOnSideChange() {
+  const sideEl = document.getElementById("paperSide");
+  if (!sideEl) return;
+  document.getElementById("paperStrikeList").innerHTML = paperStrikeOptionsHTML(sideEl.value);
+  document.getElementById("paperStrike").value = "";
+  paperOnStrikeChange();
+}
+
+function paperOnStrikeChange() {
+  const sideEl = document.getElementById("paperSide"), strikeEl = document.getElementById("paperStrike");
+  const detailsEl = document.getElementById("paperOptionDetails"), buyBtn = document.getElementById("paperBuyBtn");
+  if (!sideEl || !strikeEl) return;
+  const side = sideEl.value, strike = parseFloat(strikeEl.value);
+  const lots = parseInt((document.getElementById("paperLots") || {}).value, 10) || 1;
+  const opt = strike ? paperFindOption(side, strike) : null;
+  if (!opt) {
+    if (detailsEl) detailsEl.innerHTML = strikeEl.value
+      ? `<div class="bias-note paper-invalid-strike">⚠️ Not a live tradeable strike — pick one from the dropdown.</div>` : "";
+    if (buyBtn) buyBtn.disabled = true;
+    return;
+  }
+  const lotSize = _paperOptions.lot_size || 0;
+  const qty = lotSize * lots;
+  const cost = opt.ltp * qty;
+  detailsEl.innerHTML = `
+    <div class="paper-review-card">
+      <div class="paper-review-head">NIFTY ${opt.strike} ${side} · Expiry ${esc(_paperOptions.expiry || "—")}</div>
+      <div class="risk-row">
+        <div class="risk-item"><span class="risk-tag">LTP</span><span class="risk-val">₹${opt.ltp}</span></div>
+        <div class="risk-item"><span class="risk-tag">LOT SIZE</span><span class="risk-val">${lotSize}</span></div>
+        <div class="risk-item"><span class="risk-tag">DELTA</span><span class="risk-val">${opt.delta != null ? opt.delta.toFixed(2) : "—"}</span></div>
+        <div class="risk-item"><span class="risk-tag">IV</span><span class="risk-val">${opt.iv != null ? opt.iv.toFixed(1) + "%" : "—"}</span></div>
+        <div class="risk-item"><span class="risk-tag">OI</span><span class="risk-val">${opt.oi != null ? opt.oi.toLocaleString("en-IN") : "—"}</span></div>
+        <div class="risk-item"><span class="risk-tag">VOLUME</span><span class="risk-val">${opt.volume != null ? opt.volume.toLocaleString("en-IN") : "—"}</span></div>
+        <div class="risk-item"><span class="risk-tag">BID/ASK</span><span class="risk-val">${opt.bid != null ? opt.bid : "—"} / ${opt.ask != null ? opt.ask : "—"}</span></div>
+      </div>
+      <div class="paper-review-summary">
+        <b>Review:</b> Qty ${qty} (${lots} lot${lots === 1 ? "" : "s"}) at entry LTP ₹${opt.ltp} →
+        <b>Estimated capital used: ₹${cost.toLocaleString("en-IN")}</b>. Entry price will use whatever the live LTP is at the moment you confirm.
+      </div>
+    </div>`;
+  if (buyBtn) buyBtn.disabled = false;
 }
 
 async function paperOpen() {
@@ -2414,8 +2505,20 @@ async function paperClose(positionId) {
   }
 }
 
+document.querySelectorAll(".paper-subtab").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".paper-subtab").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    const sub = btn.dataset.sub;
+    document.getElementById("paperSubOpen").classList.toggle("hidden", sub !== "open");
+    document.getElementById("paperSubLog").classList.toggle("hidden", sub !== "log");
+    document.getElementById("paperSubAnalysis").classList.toggle("hidden", sub !== "analysis");
+  });
+});
+
 function openPaperFormFromShortlist(strike, side) {
   _paperPrefill = { strike, side };
+  document.querySelector('.paper-subtab[data-sub="open"]').click();
   document.querySelector('.tab[data-panel="paper"]').click();
 }
 
