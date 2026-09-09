@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import trend_engine
 import option_chain
+import paper_trading
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -1462,6 +1463,83 @@ def build_market():
 CACHE = {}
 CACHE_LOCK = threading.Lock()
 
+# --------------------------------------------------------------------------
+# Paper trading — SQLite file, gitignored (*.db), survives `git pull
+# --ff-only` redeploys the same way .env already does. See paper_trading.py
+# for the deterministic, no-AI accounting logic itself.
+# --------------------------------------------------------------------------
+
+PAPER_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "paper_trading.db")
+PAPER_LOCK = threading.Lock()
+_PAPER_CONN = paper_trading.get_conn(PAPER_DB_PATH)
+
+
+def _paper_find_option_row(strike, side):
+    """Looks up live LTP/lot_size/expiry for one strike+side from the
+    already-cached option chain (refreshed every 90s) — zero extra Angel
+    One calls. Returns None if that strike isn't in the currently-shown
+    ATM window (e.g. a stale/far-OTM pick)."""
+    with CACHE_LOCK:
+        oc = dict(CACHE.get("option_chain") or {})
+    if not oc:
+        return None
+    for row in oc.get("rows") or []:
+        if abs(row["strike"] - strike) < 0.01:
+            side_data = row.get(side.lower())
+            if not side_data or side_data.get("ltp") is None:
+                return None
+            return {"ltp": side_data["ltp"], "lot_size": oc.get("lot_size"),
+                    "expiry": oc.get("expiry"), "expiry_raw": oc.get("expiry_raw")}
+    return None
+
+
+def _paper_entry_snapshot():
+    """Compact dashboard-state snapshot captured at the moment of entry —
+    the whole point being able to later ask "did CONFIRMED trades actually
+    work better than WATCHING ones". Pulls only from already-computed
+    CACHE state, no new calls."""
+    with CACHE_LOCK:
+        trend = dict(CACHE.get("trend") or {})
+        oc = dict(CACHE.get("option_chain") or {})
+    setup = trend.get("setup_state") or {}
+    market = trend.get("market_state") or {}
+    return {
+        "nifty_price": trend.get("current_price"),
+        "trend_1h": trend.get("trend_1h"), "trend_15m": trend.get("today_trend_15m"),
+        "trend_5m": trend.get("today_trend_5m"),
+        "directional_bias": trend.get("directional_bias"),
+        "setup_state_status": setup.get("status"), "setup_state_label": setup.get("label"),
+        "market_state": market.get("state"), "market_state_label": market.get("label"),
+        "nearest_support_15m": trend.get("nearest_support_15m"),
+        "nearest_resistance_15m": trend.get("nearest_resistance_15m"),
+        "pcr_read": (oc.get("summary") or {}).get("pcr_read"),
+        "chain_vs_trend": oc.get("chain_vs_trend"),
+    }
+
+
+def _paper_eod_loop():
+    """Never allow an overnight paper position — matches the "intraday
+    only" scope this whole dashboard is built around. Checks once a
+    minute; naturally becomes a no-op once the day's position (if any) is
+    already closed, since get_open_position then returns None."""
+    while True:
+        try:
+            now = ist_now()
+            is_weekday = now.weekday() < 5
+            past_close = now.hour * 60 + now.minute >= 15 * 60 + 30
+            if is_weekday and past_close:
+                with PAPER_LOCK:
+                    pos = paper_trading.get_open_position(_PAPER_CONN)
+                    if pos is not None:
+                        row = _paper_find_option_row(pos["strike"], pos["side"])
+                        exit_price = row["ltp"] if row else pos["entry_price"]  # last-resort fallback, never leave it open
+                        paper_trading.close_position(
+                            _PAPER_CONN, pos["id"], exit_price,
+                            now.strftime("%Y-%m-%dT%H:%M:%S"), close_type="auto_eod")
+        except Exception:
+            pass
+        time.sleep(60)
+
 
 def _refresh_loop():
     while True:
@@ -2028,8 +2106,91 @@ class Handler(BaseHTTPRequestHandler):
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
             body = json.dumps(snap).encode("utf-8")
             self._send(HTTPStatus.OK, body, "application/json")
+        elif path == "/api/paper/state":
+            today = ist_now().date().isoformat()
+            with PAPER_LOCK:
+                open_pos = paper_trading.get_open_position(_PAPER_CONN)
+                current_ltp = None
+                if open_pos:
+                    row = _paper_find_option_row(open_pos["strike"], open_pos["side"])
+                    current_ltp = row["ltp"] if row else None
+                    open_pos = dict(open_pos)
+                    open_pos["current_ltp"] = current_ltp
+                    if current_ltp is not None:
+                        open_pos["unrealized_pnl"] = round((current_ltp - open_pos["entry_price"]) * open_pos["qty"], 2)
+                        open_pos["unrealized_pnl_pct"] = round(
+                            (current_ltp - open_pos["entry_price"]) / open_pos["entry_price"] * 100, 2)
+                account = paper_trading.compute_today_account(_PAPER_CONN, today, current_ltp=current_ltp)
+                today_trades = paper_trading.get_trade_log(_PAPER_CONN, since_date=today, limit=50)
+                recent_log = paper_trading.get_trade_log(_PAPER_CONN, limit=50)
+            body = json.dumps({
+                "account": account, "open_position": open_pos,
+                "today_trades": today_trades, "recent_log": recent_log,
+                "max_open_positions": paper_trading.MAX_OPEN_POSITIONS,
+                "daily_capital": paper_trading.DAILY_CAPITAL,
+                "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S"),
+            }).encode("utf-8")
+            self._send(HTTPStatus.OK, body, "application/json")
+        elif path == "/api/paper/analysis":
+            since = (ist_now() - timedelta(days=paper_trading.ANALYSIS_WINDOW_DAYS)).date().isoformat()
+            with PAPER_LOCK:
+                analysis = paper_trading.compute_30day_analysis(_PAPER_CONN, since)
+            body = json.dumps(analysis).encode("utf-8")
+            self._send(HTTPStatus.OK, body, "application/json")
         elif path == "/health":
             self._send(HTTPStatus.OK, b'{"status":"ok"}', "application/json")
+        else:
+            self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
+
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            payload = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+        except Exception:
+            self._send(HTTPStatus.BAD_REQUEST, b'{"error":"invalid JSON body"}', "application/json")
+            return
+
+        if path == "/api/paper/open":
+            try:
+                side = str(payload.get("side", "")).upper()
+                strike = float(payload["strike"])
+                lots = int(payload.get("lots", 1))
+                row = _paper_find_option_row(strike, side)
+                if row is None:
+                    raise RuntimeError("that strike/side isn't in the current live option chain window — "
+                                        "pick one from the visible chain/shortlist")
+                now = ist_now()
+                with PAPER_LOCK:
+                    pos = paper_trading.open_position(
+                        _PAPER_CONN, side, strike, row["expiry"] or "", row["lot_size"] or 0, lots,
+                        row["ltp"], now.strftime("%Y-%m-%dT%H:%M:%S"), now.date().isoformat(),
+                        entry_snapshot=_paper_entry_snapshot(),
+                        checklist=payload.get("checklist"), notes=payload.get("notes", ""))
+                self._send(HTTPStatus.OK, json.dumps({"position": pos}).encode("utf-8"), "application/json")
+            except Exception as exc:
+                self._send(HTTPStatus.BAD_REQUEST, json.dumps({"error": str(exc)}).encode("utf-8"), "application/json")
+        elif path == "/api/paper/close":
+            try:
+                position_id = int(payload["position_id"])
+                now = ist_now()
+                with PAPER_LOCK:
+                    open_pos = paper_trading.get_open_position(_PAPER_CONN)
+                    if not open_pos or open_pos["id"] != position_id:
+                        raise RuntimeError("that position isn't open")
+                    exit_price = payload.get("exit_price")
+                    if exit_price is None:
+                        row = _paper_find_option_row(open_pos["strike"], open_pos["side"])
+                        if row is None:
+                            raise RuntimeError("no live price available for this strike right now — "
+                                                "try again shortly, or the chain window has moved off it")
+                        exit_price = row["ltp"]
+                    pos = paper_trading.close_position(
+                        _PAPER_CONN, position_id, float(exit_price),
+                        now.strftime("%Y-%m-%dT%H:%M:%S"), close_type="manual")
+                self._send(HTTPStatus.OK, json.dumps({"position": pos}).encode("utf-8"), "application/json")
+            except Exception as exc:
+                self._send(HTTPStatus.BAD_REQUEST, json.dumps({"error": str(exc)}).encode("utf-8"), "application/json")
         else:
             self._send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
 
@@ -2043,6 +2204,7 @@ def main():
     threading.Thread(target=_option_chain_loop, daemon=True).start()
     threading.Thread(target=_angel_tick_loop, daemon=True).start()
     threading.Thread(target=_autoreload_loop, daemon=True).start()
+    threading.Thread(target=_paper_eod_loop, daemon=True).start()
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     print(f"Pre-market dashboard on http://localhost:{PORT} (build {BUILD_COMMIT}, started {BUILD_STARTED} IST)")
     try:

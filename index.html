@@ -559,6 +559,29 @@
   .msc-next-action.up   { border-color: color-mix(in srgb, var(--up) 35%, var(--line));   background: var(--up-bg); }
   .msc-next-action.down { border-color: color-mix(in srgb, var(--down) 35%, var(--line)); background: var(--down-bg); }
   .risk-row { display: flex; gap: 22px; flex-wrap: wrap; margin: 10px 0 4px; }
+  .paper-account-row { display: flex; gap: 22px; flex-wrap: wrap; margin: 10px 0 4px; }
+  .oc-paper-btn {
+    margin-top: 8px; width: 100%; padding: 6px; border-radius: 7px; border: 1px solid var(--accent);
+    background: var(--accent-bg); color: var(--accent); font-size: 11px; font-weight: 700; cursor: pointer;
+  }
+  .oc-paper-btn:hover { background: var(--accent); color: #fff; }
+  .paper-form-row { display: flex; gap: 16px; flex-wrap: wrap; margin: 10px 0 14px; align-items: end; }
+  .paper-form-row label { display: flex; flex-direction: column; gap: 4px; font-size: 10px; color: var(--faint); text-transform: uppercase; letter-spacing: .5px; font-weight: 700; }
+  .paper-form-row select, .paper-form-row input {
+    padding: 7px 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--surface2);
+    color: var(--text); font-size: 13px; font-family: var(--mono);
+  }
+  .paper-why-label { font-size: 10.5px; color: var(--faint); margin-bottom: 6px; font-style: italic; }
+  .paper-checklist { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 6px 16px; margin-bottom: 12px; }
+  .paper-check-row { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .paper-notes {
+    width: 100%; min-height: 50px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--surface2); color: var(--text); font-size: 12.5px; font-family: inherit;
+    margin-bottom: 12px; resize: vertical;
+  }
+  .paper-log-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+  .paper-log-table th { text-align: left; padding: 8px 10px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--line); }
+  .paper-log-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); }
   .risk-item { display: flex; flex-direction: column; gap: 3px; }
   .risk-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: var(--faint); font-weight: 700; }
   .risk-val { font-size: 15px; font-weight: 700; font-family: var(--mono); }
@@ -766,6 +789,7 @@
       <div class="sidebar-group">
         <div class="sidebar-group-label">Trading</div>
         <div class="tab" data-panel="optionchain"><span class="tab-icon">⇄</span><span class="tab-label">Option Chain</span> <span class="tcount" id="tabCountO">–</span></div>
+        <div class="tab" data-panel="paper"><span class="tab-icon">💹</span><span class="tab-label">Paper Trading</span> <span class="tcount" id="tabCountP">–</span></div>
       </div>
     </div>
     <div class="sidebar-foot">
@@ -860,6 +884,14 @@
     <div id="ocTable"></div>
     <div id="ocStrikeSummary"></div>
     <div id="ocLevels"></div>
+  </div>
+
+  <div id="panel-paper" class="hidden">
+    <div id="paperAccount"></div>
+    <div id="paperOpenPosition"></div>
+    <div id="paperNewTrade"></div>
+    <div id="paperAnalysis"></div>
+    <div id="paperLog"></div>
   </div>
 </main>
 <footer>Free data sources: Finnhub · Twelve Data · Alpha Vantage · NSE · Yahoo Finance · TradingView · Angel One. For reference only — not investment advice.</footer>
@@ -2137,6 +2169,7 @@ function ocShortlistCard(cand) {
       <div><span class="tg-label">Bid/Ask</span><span class="tg-val">${data.bid != null ? data.bid.toFixed(2) : "—"} / ${data.ask != null ? data.ask.toFixed(2) : "—"}</span></div>
     </div>
     <div class="oc-cand-quality">${qIcon} ${q.reasons.length ? esc(q.reasons.join(", ")) : "Looks tradeable"}</div>
+    ${data && data.ltp != null ? `<button class="oc-paper-btn" onclick="openPaperFormFromShortlist(${cand.strike}, '${cand.side}')">📝 Paper Trade</button>` : ""}
     ` : `<div class="oc-cand-body oc-empty">No data</div>`}
   </div>`;
 }
@@ -2199,6 +2232,193 @@ async function loadOptionChain() {
   }
 }
 
+/* --- Paper Trading (deterministic, no AI, no real orders — V1 scope:
+   BUY CE / BUY PE only, max 1 open position, ₹50,000 fixed daily capital
+   that never compounds, EOD auto-close, 30-day analysis) --- */
+let paperLoaded = false;
+let _paperPollTimer = null;
+let _paperPrefill = null; // {strike, side} set by the Option Chain "Paper Trade" button
+
+function startPaperPolling() { stopPaperPolling(); _paperPollTimer = setInterval(loadPaper, 10000); }
+function stopPaperPolling() { if (_paperPollTimer) clearInterval(_paperPollTimer); _paperPollTimer = null; }
+
+function paperAccountHTML(s) {
+  const a = s.account;
+  const pnlCls = a.total_pnl > 0 ? "up" : a.total_pnl < 0 ? "down" : "flat";
+  return `
+  <div class="bias flat paper-account-card">
+    <div class="msc-label">PAPER TRADING — TODAY (₹${a.starting_capital.toLocaleString("en-IN")} fixed daily capital, does not compound)</div>
+    <div class="paper-account-row">
+      <div class="risk-item"><span class="risk-tag">CASH</span><span class="risk-val">₹${a.available_cash.toLocaleString("en-IN")}</span></div>
+      <div class="risk-item"><span class="risk-tag">OPEN VALUE</span><span class="risk-val">₹${a.open_position_value.toLocaleString("en-IN")}</span></div>
+      <div class="risk-item ${a.unrealized_pnl > 0 ? "up" : a.unrealized_pnl < 0 ? "down" : ""}"><span class="risk-tag">UNREALIZED</span><span class="risk-val">₹${a.unrealized_pnl.toLocaleString("en-IN")}</span></div>
+      <div class="risk-item ${a.realized_pnl > 0 ? "up" : a.realized_pnl < 0 ? "down" : ""}"><span class="risk-tag">REALIZED</span><span class="risk-val">₹${a.realized_pnl.toLocaleString("en-IN")}</span></div>
+      <div class="risk-item ${pnlCls}"><span class="risk-tag">TOTAL P&amp;L</span><span class="risk-val ${pnlCls}">₹${a.total_pnl.toLocaleString("en-IN")} (${a.return_pct}%)</span></div>
+      <div class="risk-item"><span class="risk-tag">EQUITY</span><span class="risk-val">₹${a.equity.toLocaleString("en-IN")}</span></div>
+    </div>
+    <div class="bias-note">Today: ${a.trades_today} trade${a.trades_today === 1 ? "" : "s"} · ${a.wins_today}W / ${a.losses_today}L. Max ${s.max_open_positions} open position at a time in V1 — long-only BUY CE/BUY PE, no futures/spreads/selling/automation.</div>
+  </div>`;
+}
+
+function paperOpenPositionHTML(s) {
+  const p = s.open_position;
+  if (!p) return `<div class="bias flat"><div class="bias-note">No open paper position. Use "New Paper Trade" below, or the 📝 Paper Trade button on an Option Chain shortlist card.</div></div>`;
+  const pnl = p.unrealized_pnl != null ? p.unrealized_pnl : null;
+  const cls = pnl > 0 ? "up" : pnl < 0 ? "down" : "flat";
+  return `
+  <div class="bias ${cls} paper-open-card">
+    <div class="msc-label">OPEN POSITION</div>
+    <div class="bias-head"><span class="bias-verdict">NIFTY ${fmtPrice(p.strike)} ${esc(p.side)}</span><span class="bias-counts">Expiry ${esc(p.expiry)}</span></div>
+    <div class="risk-row">
+      <div class="risk-item"><span class="risk-tag">QTY</span><span class="risk-val">${p.qty} (${p.lots} lot${p.lots === 1 ? "" : "s"})</span></div>
+      <div class="risk-item"><span class="risk-tag">ENTRY</span><span class="risk-val">₹${p.entry_price}</span></div>
+      <div class="risk-item"><span class="risk-tag">LTP</span><span class="risk-val">${p.current_ltp != null ? "₹" + p.current_ltp : "—"}</span></div>
+      <div class="risk-item ${cls}"><span class="risk-tag">P&amp;L</span><span class="risk-val ${cls}">${pnl != null ? "₹" + pnl : "—"} ${p.unrealized_pnl_pct != null ? `(${p.unrealized_pnl_pct}%)` : ""}</span></div>
+    </div>
+    <button class="refresh" style="margin-top:10px;" onclick="paperClose(${p.id})">Close Position</button>
+  </div>`;
+}
+
+const PAPER_CHECKLIST_ITEMS = [
+  ["15m_direction", "15M direction matches the side"], ["bos", "Bullish/Bearish BOS"],
+  ["breakout", "Real (close-confirmed) breakout/breakdown"], ["retest", "Retest held"],
+  ["5m_confirm", "5M entry confirmation"], ["choch", "CHoCH (counter-trend — note why anyway)"],
+];
+
+function paperNewTradeFormHTML(s) {
+  if (s.open_position) return ""; // max 1 open position in V1 — form only shows when slot is free
+  const pf = _paperPrefill || { strike: "", side: "CE" };
+  const checklistRows = PAPER_CHECKLIST_ITEMS.map(([id, label]) =>
+    `<label class="paper-check-row"><input type="checkbox" id="pchk_${id}"> ${esc(label)}</label>`).join("");
+  return `
+  <div class="bias flat">
+    <div class="msc-label">NEW PAPER TRADE</div>
+    <div class="paper-form-row">
+      <label>Side<select id="paperSide">
+        <option value="CE" ${pf.side === "CE" ? "selected" : ""}>BUY CE</option>
+        <option value="PE" ${pf.side === "PE" ? "selected" : ""}>BUY PE</option>
+      </select></label>
+      <label>Strike<input type="number" id="paperStrike" value="${pf.strike}" step="50" placeholder="e.g. 24000"></label>
+      <label>Lots<input type="number" id="paperLots" value="1" min="1" step="1" style="width:60px"></label>
+    </div>
+    <div class="paper-why-label">Why are you entering? (not enforced — for your own review later)</div>
+    <div class="paper-checklist">${checklistRows}</div>
+    <textarea id="paperNotes" placeholder="Notes (optional)" class="paper-notes"></textarea>
+    <div id="paperFormError" class="errbanner" style="display:none;"></div>
+    <button class="refresh" onclick="paperOpen()">Confirm Paper Buy</button>
+  </div>`;
+}
+
+function paperAnalysisHTML(a) {
+  if (!a || !a.trades) {
+    return `<div class="bias flat"><div class="msc-label">LAST 30 DAYS</div><div class="bias-note">No closed trades yet.</div></div>`;
+  }
+  const sideRow = (label, b) => !b ? "" : `<div class="risk-item"><span class="risk-tag">${label}</span><span class="risk-val">${b.trades} trades · ${b.win_rate}% win · ₹${b.pnl}</span></div>`;
+  const bucketRows = (obj) => Object.entries(obj || {}).map(([k, b]) =>
+    `<div class="risk-item"><span class="risk-tag">${esc(k.replace(/_/g, " ").toUpperCase())}</span><span class="risk-val">${b.trades} trades · ${b.win_rate}% win · ₹${b.pnl}</span></div>`).join("");
+  return `
+  <div class="bias flat">
+    <div class="msc-label">LAST 30 DAYS</div>
+    <div class="risk-row">
+      <div class="risk-item"><span class="risk-tag">TRADES</span><span class="risk-val">${a.trades} (${a.trading_days} days)</span></div>
+      <div class="risk-item"><span class="risk-tag">WIN RATE</span><span class="risk-val">${a.win_rate}% (${a.wins}W/${a.losses}L)</span></div>
+      <div class="risk-item ${a.net_pnl >= 0 ? "up" : "down"}"><span class="risk-tag">NET P&amp;L</span><span class="risk-val">₹${a.net_pnl}</span></div>
+      <div class="risk-item"><span class="risk-tag">AVG WIN / LOSS</span><span class="risk-val">₹${a.avg_win} / ₹${a.avg_loss}</span></div>
+      <div class="risk-item"><span class="risk-tag">BEST / WORST DAY</span><span class="risk-val">₹${a.best_day} / ₹${a.worst_day}</span></div>
+    </div>
+    <div class="msc-label" style="margin-top:14px;">BY SIDE</div>
+    <div class="risk-row">${sideRow("CE", a.by_side.CE)}${sideRow("PE", a.by_side.PE)}</div>
+    <div class="msc-label" style="margin-top:14px;">BY TRADE STATE AT ENTRY</div>
+    <div class="risk-row">${bucketRows(a.by_trade_state) || '<div class="bias-note">No data</div>'}</div>
+  </div>`;
+}
+
+function paperLogHTML(s) {
+  const rows = s.recent_log || [];
+  if (!rows.length) return "";
+  const trs = rows.map(r => `
+    <tr>
+      <td>${esc((r.trading_day || "").slice(5))}</td>
+      <td>${esc((r.entry_time || "").slice(11, 16))}</td>
+      <td>${fmtPrice(r.strike)} ${esc(r.side)}</td>
+      <td>₹${r.entry_price}</td>
+      <td>₹${r.exit_price}</td>
+      <td>${r.qty}</td>
+      <td class="${r.pnl > 0 ? "up" : "down"}">₹${r.pnl}</td>
+      <td>${r.pnl > 0 ? "WIN" : "LOSS"}</td>
+      <td>${r.close_type === "auto_eod" ? "Auto EOD" : "Manual"}</td>
+    </tr>`).join("");
+  return `
+  <div class="bias flat">
+    <div class="msc-label">TRADE LOG</div>
+    <div class="oc-table-wrap"><table class="paper-log-table">
+      <thead><tr><th>Date</th><th>Time</th><th>Instrument</th><th>Entry</th><th>Exit</th><th>Qty</th><th>P&amp;L</th><th>Result</th><th>Close</th></tr></thead>
+      <tbody>${trs}</tbody>
+    </table></div>
+  </div>`;
+}
+
+async function loadPaper() {
+  try {
+    const res = await fetch("/api/paper/state", { cache: "no-store" });
+    const s = await res.json();
+    paperLoaded = true;
+    document.getElementById("tabCountP").textContent = s.open_position ? "1" : "0";
+    document.getElementById("paperAccount").innerHTML = paperAccountHTML(s);
+    document.getElementById("paperOpenPosition").innerHTML = paperOpenPositionHTML(s);
+    document.getElementById("paperNewTrade").innerHTML = paperNewTradeFormHTML(s);
+    document.getElementById("paperLog").innerHTML = paperLogHTML(s);
+    const ares = await fetch("/api/paper/analysis", { cache: "no-store" });
+    const a = await ares.json();
+    document.getElementById("paperAnalysis").innerHTML = paperAnalysisHTML(a);
+  } catch (e) {
+    document.getElementById("paperAccount").innerHTML = `<div class="errbanner">Could not load paper trading — ${esc(e.message)}</div>`;
+  }
+}
+
+async function paperOpen() {
+  const side = document.getElementById("paperSide").value;
+  const strike = parseFloat(document.getElementById("paperStrike").value);
+  const lots = parseInt(document.getElementById("paperLots").value, 10) || 1;
+  const notes = document.getElementById("paperNotes").value;
+  const errEl = document.getElementById("paperFormError");
+  errEl.style.display = "none";
+  if (!strike) { errEl.textContent = "Enter a strike price."; errEl.style.display = "block"; return; }
+  const checklist = { items: {}, notes };
+  PAPER_CHECKLIST_ITEMS.forEach(([id]) => { checklist.items[id] = document.getElementById(`pchk_${id}`).checked; });
+  try {
+    const res = await fetch("/api/paper/open", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ side, strike, lots, notes, checklist }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || "failed to open position");
+    _paperPrefill = null;
+    loadPaper();
+  } catch (e) {
+    errEl.textContent = e.message; errEl.style.display = "block";
+  }
+}
+
+async function paperClose(positionId) {
+  try {
+    const res = await fetch("/api/paper/close", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ position_id: positionId }),
+    });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || "failed to close position");
+    loadPaper();
+  } catch (e) {
+    alert("Could not close position: " + e.message);
+  }
+}
+
+function openPaperFormFromShortlist(strike, side) {
+  _paperPrefill = { strike, side };
+  document.querySelector('.tab[data-panel="paper"]').click();
+}
+
 document.querySelectorAll(".tab").forEach(t => {
   t.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
@@ -2209,6 +2429,7 @@ document.querySelectorAll(".tab").forEach(t => {
     document.getElementById("panel-news").classList.toggle("hidden", panel !== "news");
     document.getElementById("panel-trend").classList.toggle("hidden", panel !== "trend");
     document.getElementById("panel-optionchain").classList.toggle("hidden", panel !== "optionchain");
+    document.getElementById("panel-paper").classList.toggle("hidden", panel !== "paper");
     if (panel === "news" && !newsLoaded) loadNews();
     if (panel === "trend") {
       if (!trendLoaded) loadTrend();
@@ -2221,6 +2442,12 @@ document.querySelectorAll(".tab").forEach(t => {
       startOcPolling();
     } else {
       stopOcPolling();
+    }
+    if (panel === "paper") {
+      loadPaper();
+      startPaperPolling();
+    } else {
+      stopPaperPolling();
     }
     document.body.classList.remove("sidebar-mobile-open"); // picking a section closes the mobile drawer
   });
