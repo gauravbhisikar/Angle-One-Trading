@@ -1316,14 +1316,27 @@ function trendStatusHTML(d) {
   };
 
   const structureEventsHTML = () => {
-    const bosArr = d[`bos_events_${tf}`] || [];
-    const chochArr = d[`choch_events_${tf}`] || [];
-    const boArr = d[`breakouts_${tf}`] || [];
-    const bdArr = d[`breakdowns_${tf}`] || [];
-    const rtArr = d[`retests_${tf}`] || [];
-    const sigNow = d[`structure_signal_${tf}`];
-    const nowI = (d[`candles_${tf}`] || []).length - 1;
-    const isRecent = ev => ev && nowI - ev.i <= 8;
+    // 15M/5M are today-scoped everywhere else in this dashboard (the
+    // trade decision, the chart, the STRUCTURE SIGNAL card) — these event
+    // badges must match, using the actual "today" candle-index boundary
+    // instead of a fixed 8-candle recency window (which, right after
+    // market open, could still reach back into yesterday's last ~2 hours
+    // of candles and show a stale event as if it were today's). 1H stays
+    // unscoped — it's deliberately multi-day CONTEXT, not part of the
+    // today-only decision.
+    const todayStartI = tf === "1h" ? null : d[`today_start_i_${tf}`];
+    const scopeTo = (arr) => todayStartI == null ? (arr || []) : (arr || []).filter(e => e.i >= todayStartI);
+    const bosArr = scopeTo(d[`bos_events_${tf}`]);
+    const chochArr = scopeTo(d[`choch_events_${tf}`]);
+    const boArr = scopeTo(d[`breakouts_${tf}`]);
+    const bdArr = scopeTo(d[`breakdowns_${tf}`]);
+    const rtArr = scopeTo(d[`retests_${tf}`]);
+    const sigNow = tf === "15m" ? d.today_structure_signal_15m : tf === "5m" ? d.today_structure_signal_5m : d[`structure_signal_${tf}`];
+    // Once scoped to today (or left as continuous for 1H), any event that
+    // survived the filter is relevant — no separate candle-count decay on
+    // top of that (today's 09:20 breakout is still "today's breakout" at
+    // 15:00, not stale).
+    const isRecent = ev => !!ev;
 
     const bos = bosArr.length ? bosArr[bosArr.length - 1] : null;
     const choch = chochArr.length ? chochArr[chochArr.length - 1] : null;

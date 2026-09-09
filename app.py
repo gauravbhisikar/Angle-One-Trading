@@ -1632,13 +1632,25 @@ def build_trend():
 
     today_start_i_5m = _today_start_i(out["candles_5m"])
     today_labels_5m = [ev["label"] for ev in out["structure_detail_5m"] if ev["i"] >= today_start_i_5m]
+    today_swings_5m = sum(1 for sw in out["swings_5m"] if sw["i"] >= today_start_i_5m)
     today_trend_5m = trend_engine.classify_label_tail(today_labels_5m[-4:])
+    today_sig_5m = trend_engine.today_structure_signal(today_labels_5m, today_swings_5m)
 
     out["today_trend_15m"] = today_trend_15m
     out["today_trend_5m"] = today_trend_5m
     out["today_labels_15m"] = today_labels_15m
     out["today_labels_5m"] = today_labels_5m
     out["today_structure_signal_15m"] = today_sig_15m
+    out["today_structure_signal_5m"] = today_sig_5m
+    # Exposed directly so the frontend has one source of truth for "today"
+    # boundaries instead of re-deriving them from candle dates itself (it
+    # already does this for the chart's candle count — this covers the
+    # BOS/CHoCH/breakout/breakdown/retest event badges, which previously
+    # used an 8-candle recency window instead of an actual day boundary,
+    # meaning right after market open that window could still reach back
+    # into yesterday's last ~2 hours of candles).
+    out["today_start_i_15m"] = today_start_i_15m
+    out["today_start_i_5m"] = today_start_i_5m
 
     # --- "Last 3 trading days" — overall market context, separate card ---
     # Not the trade decision (that's the today-scoped read above) — this is
@@ -1977,6 +1989,7 @@ class Handler(BaseHTTPRequestHandler):
                             "primary_trend": None, "directional_bias": None, "risk_levels": None,
                             "today_trend_15m": None, "today_trend_5m": None,
                             "today_labels_15m": [], "today_labels_5m": [], "today_structure_signal_15m": None,
+                            "today_structure_signal_5m": None, "today_start_i_15m": 0, "today_start_i_5m": 0,
                             "recent3d_dates": [], "recent3d_trend_15m": None, "recent3d_labels_15m": [],
                             "recent3d_structure_signal_15m": None, "recent3d_primary_trend": None,
                             "recent3d_directional_bias": None,
