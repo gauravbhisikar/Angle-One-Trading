@@ -1649,7 +1649,7 @@ function trendStatusHTML(d) {
   </div>`;
 }
 
-function drawTrendChart(canvas, data, tf, cssH = 420, overrideCount = null) {
+function drawTrendChart(canvas, data, tf, cssH = 420, overrideCount = null, todayOnly = false) {
   if (!canvas || !data) return;
   const candles = data[`candles_${tf}`] || [];
   if (!candles.length) return;
@@ -1712,8 +1712,17 @@ function drawTrendChart(canvas, data, tf, cssH = 420, overrideCount = null) {
   // swing HIGHS for a downtrend (falling resistance line) — from where
   // the trend started onward. Sideways draws nothing (no consistent line
   // to draw).
-  const trendForLine = data[`trend_${tf}`];
-  const trendStartForLine = data[`trend_start_${tf}`];
+  // TODAY-ONLY mode (the primary 15M chart): the trend that decides the
+  // line's direction/color must be TODAY's own session trend, not the
+  // multi-day continuous one — otherwise this chart could draw a falling
+  // trendline (and color it bearish) off a multi-day "bearish" read while
+  // today's own 15M structure hasn't confirmed anything yet, which is
+  // exactly the "today only" fix's whole point being undermined visually.
+  // `fromI` becomes the start of the shown (today-only) window itself,
+  // never a multi-day trend_start, since every swing in view is already
+  // today's by construction once overrideCount restricts the candle slice.
+  const trendForLine = todayOnly ? (data[`today_trend_${tf}`] || "sideways") : data[`trend_${tf}`];
+  const trendStartForLine = todayOnly ? null : data[`trend_start_${tf}`];
   if (trendForLine === "bullish" || trendForLine === "bearish") {
     const wantType = trendForLine === "bullish" ? "low" : "high";
     const fromI = trendStartForLine ? trendStartForLine.i : firstShownI;
@@ -1738,7 +1747,11 @@ function drawTrendChart(canvas, data, tf, cssH = 420, overrideCount = null) {
     ctx.textAlign = "left";
   }
 
-  const trendStart = data[`trend_start_${tf}`];
+  // Same today-only guard as the line above — this is a SEPARATE draw call
+  // that independently re-reads trend_start, so it must be gated too or it
+  // silently reintroduces the multi-day marker even after the line itself
+  // was correctly scoped to today.
+  const trendStart = todayOnly ? null : data[`trend_start_${tf}`];
   if (trendStart && trendStart.i >= firstShownI) {
     const trend = data[`trend_${tf}`];
     const markerCol = trend === "bullish" ? upCol : trend === "bearish" ? downCol : amberCol;
@@ -1818,7 +1831,13 @@ async function loadTrend() {
 }
 
 function drawAllTrendCharts(d) {
-  drawTrendChart(document.getElementById("trendChart15m"), d, "15m", 380);
+  // Primary 15M chart shows TODAY's session only, and its trendline must
+  // reflect TODAY's own trend (today_trend_15m) — not the multi-day
+  // continuous read, which lives in the separate "LAST 3 DAYS" chart below.
+  const todayStr = (d.generated_at || "").slice(0, 10);
+  const candles15mAll = d.candles_15m || [];
+  const todayCount15m = todayStr ? candles15mAll.filter(c => (c.date || "").slice(0, 10) === todayStr).length : null;
+  drawTrendChart(document.getElementById("trendChart15m"), d, "15m", 380, todayCount15m || undefined, true);
   drawTrendChart(document.getElementById("trendChart1h"), d, "1h", 220);
   drawTrendChart(document.getElementById("trendChart5m"), d, "5m", 220);
   // Exact "last 3 trading sessions" candle count, not a fixed number —
