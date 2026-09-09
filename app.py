@@ -1640,6 +1640,28 @@ def build_trend():
     out["today_labels_5m"] = today_labels_5m
     out["today_structure_signal_15m"] = today_sig_15m
 
+    # --- "Last 3 trading days" — overall market context, separate card ---
+    # Not the trade decision (that's the today-scoped read above) — this is
+    # explicitly a reference/context view, same rescoping technique (candle
+    # index >= some start), just a wider window: the last 3 distinct trading
+    # dates seen in the 15M candle history (today + the 2 sessions before it),
+    # not a fixed candle count, so it stays exactly "3 sessions" regardless
+    # of a shortened/extended trading day.
+    all_dates_15m = sorted({c["date"][:10] for c in out["candles_15m"]})
+    recent3d_dates = all_dates_15m[-3:]
+    recent3d_start_i = _today_start_i(out["candles_15m"]) if not recent3d_dates else next(
+        (i for i, c in enumerate(out["candles_15m"]) if c["date"][:10] == recent3d_dates[0]), len(out["candles_15m"]))
+    recent3d_labels_15m = [ev["label"] for ev in out["structure_detail_15m"] if ev["i"] >= recent3d_start_i]
+    recent3d_swings_15m = sum(1 for sw in out["swings_15m"] if sw["i"] >= recent3d_start_i)
+    recent3d_trend_15m = trend_engine.classify_label_tail(recent3d_labels_15m[-4:])
+    recent3d_sig_15m = trend_engine.today_structure_signal(recent3d_labels_15m, recent3d_swings_15m)
+    out["recent3d_dates"] = recent3d_dates
+    out["recent3d_trend_15m"] = recent3d_trend_15m
+    out["recent3d_labels_15m"] = recent3d_labels_15m
+    out["recent3d_structure_signal_15m"] = recent3d_sig_15m
+    out["recent3d_primary_trend"] = trend_engine.primary_trend_label(recent3d_trend_15m, recent3d_sig_15m)
+    out["recent3d_directional_bias"] = trend_engine.directional_bias(recent3d_trend_15m, out["recent3d_primary_trend"])
+
     out["mtf_read"] = trend_engine.multi_timeframe_read(out["trend_1h"], today_trend_15m, today_trend_5m)
     out["primary_trend"] = trend_engine.primary_trend_label(today_trend_15m, today_sig_15m)
     out["directional_bias"] = trend_engine.directional_bias(today_trend_15m, out["primary_trend"])
@@ -1955,6 +1977,9 @@ class Handler(BaseHTTPRequestHandler):
                             "primary_trend": None, "directional_bias": None, "risk_levels": None,
                             "today_trend_15m": None, "today_trend_5m": None,
                             "today_labels_15m": [], "today_labels_5m": [], "today_structure_signal_15m": None,
+                            "recent3d_dates": [], "recent3d_trend_15m": None, "recent3d_labels_15m": [],
+                            "recent3d_structure_signal_15m": None, "recent3d_primary_trend": None,
+                            "recent3d_directional_bias": None,
                             "nearest_support": None, "nearest_resistance": None, "invalidation_level": None,
                             "generated_at": ist_now().strftime("%Y-%m-%d %H:%M:%S")}
                     for tf in TREND_TIMEFRAMES:
