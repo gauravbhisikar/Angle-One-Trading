@@ -652,13 +652,28 @@ def angelone_login():
 
 
 def angelone_candles(headers, exchange, symboltoken, days=30, interval="ONE_DAY"):
-    to = date.today()
+    # Confirmed live on 2026-09-14: candles silently stopped at the prior
+    # Friday's close hours into a fresh Monday session, with zero exception
+    # raised anywhere (data_status correctly went "stale", but nothing
+    # explained why the fetch itself kept returning old data). Root cause:
+    # "todate" was hardcoded to "<today> 15:30" unconditionally, even when
+    # it's still mid-session and 15:30 hasn't happened yet — Angel One's
+    # historical endpoint appears to silently drop the CURRENT day entirely
+    # from the response when asked for a "todate" moment that hasn't
+    # occurred yet, rather than erroring or truncating gracefully. Also
+    # fixed: `date.today()` reads the server OS's own clock/timezone (often
+    # UTC on a Lightsail box), not IST — near midnight IST that could be a
+    # different calendar date than intended. Both use ist_now() now, and
+    # the "todate" bound is never later than the actual current moment.
+    now = ist_now()
+    to = now.date()
     fr = to - timedelta(days=days)
+    to_time = min(now, now.replace(hour=15, minute=30, second=0, microsecond=0))
     _angel_rate_gate()
     hist = http_post_json(
         "https://apiconnect.angelbroking.com/rest/secure/angelbroking/historical/v1/getCandleData",
         {"exchange": exchange, "symboltoken": symboltoken, "interval": interval,
-         "fromdate": fr.strftime("%Y-%m-%d 09:15"), "todate": to.strftime("%Y-%m-%d 15:30")},
+         "fromdate": fr.strftime("%Y-%m-%d 09:15"), "todate": to_time.strftime("%Y-%m-%d %H:%M")},
         headers=headers, timeout=20)
     rows = hist.get("data") or []
     parsed = []
@@ -875,7 +890,14 @@ def _angelone_rate_limited_retry(fn):
     land two calls in the same window even with a fixed sleep between them,
     and one retry sometimes still isn't enough. Backs off harder each
     attempt (2s, 4s) before giving up and letting the caller fall back to
-    NSE/Yahoo."""
+    NSE/Yahoo.
+
+    Also invalidates the cached session on a 403: confirmed live on
+    2026-09-14 that a persistent 403 can outlive a single retry burst and
+    keep recurring for many minutes — since angelone_session() only
+    re-logs-in once its 300s TTL expires, every call in that window was
+    retrying with the SAME (bad) cached JWT instead of getting a fresh one.
+    Dropping the cache here forces the next call anywhere to re-login."""
     last = None
     for backoff in (0, 2, 4):
         if backoff:
@@ -885,6 +907,7 @@ def _angelone_rate_limited_retry(fn):
         except urllib.error.HTTPError as e:
             if e.code != 403:
                 raise
+            ANGEL_SESSION["headers"] = None
             last = e
     raise last
 
