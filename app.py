@@ -2081,6 +2081,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/trend":
             with CACHE_LOCK:
                 snap = dict(CACHE.get("trend") or {})
+                trend_bg_error = CACHE.get("trend_error")
+            # Surface the background loop's last error even when a (possibly
+            # stale) cached snapshot already exists — previously this was
+            # only visible when the cache was completely empty, so a loop
+            # that's been failing every cycle for days while quietly serving
+            # an old cached snapshot gave zero visibility into why, without
+            # SSH access to read server logs directly.
+            if snap:
+                snap["trend_bg_error"] = trend_bg_error
             if not snap:
                 try:
                     snap = build_trend()
