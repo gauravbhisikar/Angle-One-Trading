@@ -946,9 +946,41 @@ def ist_now():
     return datetime.now(timezone.utc) + TZ_IST
 
 
+# NSE/BSE equity-segment trading holidays, 2026 (source: exchange holiday
+# circular via published holiday calendars, checked 2026-09-14). Was
+# previously entirely missing — market_open()/market_info() were
+# weekday-only, so the dashboard falsely showed "NSE OPEN" on
+# 2026-09-14 (Ganesh Chaturthi, a Monday) while the market was genuinely
+# closed, making the Trend tab's correct "DATA STALE" read look like a
+# contradiction instead of the expected state. Needs a yearly refresh —
+# check the exchange's published holiday circular each December.
+NSE_HOLIDAYS_2026 = {
+    "2026-01-15": "Special Trading Holiday",
+    "2026-01-26": "Republic Day",
+    "2026-03-03": "Holi",
+    "2026-03-26": "Shri Ram Navami",
+    "2026-03-31": "Shri Mahavir Jayanti",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Baba Saheb Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day",
+    "2026-05-28": "Bakri Eid",
+    "2026-06-26": "Moharram",
+    "2026-09-14": "Ganesh Chaturthi",
+    "2026-10-02": "Mahatma Gandhi Jayanti",
+    "2026-10-20": "Dussehra",
+    "2026-11-10": "Diwali-Balipratipada",
+    "2026-11-24": "Prakash Gurpurb Sri Guru Nanak Dev",
+    "2026-12-25": "Christmas",
+}
+
+
+def _nse_holiday_name(d):
+    return NSE_HOLIDAYS_2026.get(d.isoformat())
+
+
 def market_open():
     now = ist_now()
-    if now.weekday() >= 5:
+    if now.weekday() >= 5 or _nse_holiday_name(now.date()):
         return False
     t = now.hour * 60 + now.minute
     return 9 * 60 + 15 <= t <= 15 * 60 + 30
@@ -958,10 +990,11 @@ def market_info():
     """Returns open/closed state plus the next 09:15 IST open time."""
     now = ist_now()
     wd = now.weekday()
+    holiday_name = _nse_holiday_name(now.date())
     hhmm = now.hour * 60 + now.minute
     open_t = 9 * 60 + 15
     close_t = 15 * 60 + 30
-    if wd >= 5:
+    if wd >= 5 or holiday_name:
         state = "closed"
     elif hhmm < open_t:
         state = "pre-market"
@@ -971,7 +1004,7 @@ def market_info():
         state = "closed"
 
     def next_weekday_915(d):
-        while d.weekday() >= 5:
+        while d.weekday() >= 5 or _nse_holiday_name(d.date()):
             d += timedelta(days=1)
         return d.replace(hour=9, minute=15, second=0, microsecond=0)
 
@@ -984,10 +1017,11 @@ def market_info():
     hints = {
         "open": "values are live",
         "pre-market": "these readings set today's opening tone",
-        "closed": "last available values",
+        "closed": f"NSE holiday today — {holiday_name} · last available values" if holiday_name
+                  else "last available values",
     }
     return {"state": state, "open": state == "open",
-            "state_hint": hints[state],
+            "state_hint": hints[state], "holiday_name": holiday_name,
             "now": now.strftime("%Y-%m-%d %H:%M:%S"),
             "next_open": nxt.strftime("%Y-%m-%d %H:%M")}
 
