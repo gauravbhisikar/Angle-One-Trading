@@ -2265,7 +2265,7 @@ let paperLoaded = false;
 let _paperPollTimer = null;
 let _paperPrefill = null; // {strike, side} set by the Option Chain "Paper Trade" button
 
-function startPaperPolling() { stopPaperPolling(); _paperPollTimer = setInterval(loadPaper, 10000); }
+function startPaperPolling() { stopPaperPolling(); _paperPollTimer = setInterval(() => loadPaper(false), 2000); }
 function stopPaperPolling() { if (_paperPollTimer) clearInterval(_paperPollTimer); _paperPollTimer = null; }
 
 function paperAccountHTML(s) {
@@ -2292,14 +2292,18 @@ function paperOpenPositionHTML(s) {
   if (!p) return `<div class="bias flat"><div class="bias-note">No open paper position. Use "New Paper Trade" below, or the 📝 Paper Trade button on an Option Chain shortlist card.</div></div>`;
   const pnl = p.unrealized_pnl != null ? p.unrealized_pnl : null;
   const cls = pnl > 0 ? "up" : pnl < 0 ? "down" : "flat";
+  const capitalUsed = p.entry_price * p.qty;
+  const currentValue = p.current_ltp != null ? p.current_ltp * p.qty : null;
   return `
   <div class="bias ${cls} paper-open-card">
-    <div class="msc-label">OPEN POSITION</div>
+    <div class="msc-label">OPEN POSITION · live, updates every 2s</div>
     <div class="bias-head"><span class="bias-verdict">NIFTY ${fmtPrice(p.strike)} ${esc(p.side)}</span><span class="bias-counts">Expiry ${esc(p.expiry)}</span></div>
     <div class="risk-row">
       <div class="risk-item"><span class="risk-tag">QTY</span><span class="risk-val">${p.qty} (${p.lots} lot${p.lots === 1 ? "" : "s"})</span></div>
       <div class="risk-item"><span class="risk-tag">ENTRY</span><span class="risk-val">₹${p.entry_price}</span></div>
       <div class="risk-item"><span class="risk-tag">LTP</span><span class="risk-val">${p.current_ltp != null ? "₹" + p.current_ltp : "—"}</span></div>
+      <div class="risk-item"><span class="risk-tag">CAPITAL USED</span><span class="risk-val">₹${capitalUsed.toLocaleString("en-IN")}</span></div>
+      <div class="risk-item"><span class="risk-tag">CURRENT VALUE</span><span class="risk-val">${currentValue != null ? "₹" + currentValue.toLocaleString("en-IN") : "—"}</span></div>
       <div class="risk-item ${cls}"><span class="risk-tag">P&amp;L</span><span class="risk-val ${cls}">${pnl != null ? "₹" + pnl : "—"} ${p.unrealized_pnl_pct != null ? `(${p.unrealized_pnl_pct}%)` : ""}</span></div>
     </div>
     <button class="refresh" style="margin-top:10px;" onclick="paperClose(${p.id})">Close Position</button>
@@ -2399,7 +2403,16 @@ function paperLogHTML(s) {
   </div>`;
 }
 
-async function loadPaper() {
+let _paperHadOpenPosition = null;
+
+// fullRefresh=false (the 2s fast-poll case) only touches the account strip
+// and the open-position P&L — never re-renders the new-trade form/log/
+// analysis, since re-rendering the form's innerHTML every 2s would wipe
+// out whatever the user was mid-typing (checklist ticks, notes, a
+// partially-typed strike search) every couple seconds. Full refresh only
+// happens on tab-open, right after a buy/close, or when the open-position
+// state actually flips (so the form correctly appears/disappears).
+async function loadPaper(fullRefresh = true) {
   try {
     const res = await fetch("/api/paper/state", { cache: "no-store" });
     const s = await res.json();
@@ -2408,12 +2421,17 @@ async function loadPaper() {
     document.getElementById("tabCountP").textContent = s.open_position ? "1" : "0";
     document.getElementById("paperAccount").innerHTML = paperAccountHTML(s);
     document.getElementById("paperOpenPosition").innerHTML = paperOpenPositionHTML(s);
-    document.getElementById("paperNewTrade").innerHTML = paperNewTradeFormHTML(s);
-    paperOnStrikeChange(); // initialize details/review for whatever value the form rendered with (prefill or blank)
-    document.getElementById("paperLog").innerHTML = paperLogHTML(s);
-    const ares = await fetch("/api/paper/analysis", { cache: "no-store" });
-    const a = await ares.json();
-    document.getElementById("paperAnalysis").innerHTML = paperAnalysisHTML(a);
+
+    const hasOpen = !!s.open_position;
+    if (fullRefresh || hasOpen !== _paperHadOpenPosition) {
+      document.getElementById("paperNewTrade").innerHTML = paperNewTradeFormHTML(s);
+      paperOnStrikeChange(); // initialize details/review for whatever value the form rendered with (prefill or blank)
+      document.getElementById("paperLog").innerHTML = paperLogHTML(s);
+      const ares = await fetch("/api/paper/analysis", { cache: "no-store" });
+      const a = await ares.json();
+      document.getElementById("paperAnalysis").innerHTML = paperAnalysisHTML(a);
+    }
+    _paperHadOpenPosition = hasOpen;
   } catch (e) {
     document.getElementById("paperAccount").innerHTML = `<div class="errbanner">Could not load paper trading — ${esc(e.message)}</div>`;
   }
