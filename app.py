@@ -1071,13 +1071,12 @@ def nifty_ohlc_and_trend():
 
     # Staleness check: is `yesterday` actually the most recent trading day,
     # or is the data source (esp. the Yahoo fallback, which can lag NSE's
-    # real close by a day) stuck one or more sessions behind? Only weekends
-    # are accounted for (no NSE holiday calendar in this codebase) — a
-    # legitimate holiday will false-positive here, which is an acceptable
-    # false-alarm rate given the alternative is silently trusting wrong data.
+    # real close by a day) stuck one or more sessions behind? Weekends and
+    # NSE_HOLIDAYS_2026 are both skipped when walking back to the expected
+    # last trading day.
     today_date = ist_now().date()
     expected = today_date - timedelta(days=1)
-    while expected.weekday() >= 5:
+    while expected.weekday() >= 5 or _nse_holiday_name(expected):
         expected -= timedelta(days=1)
     yesterday_date = datetime.strptime(yesterday["date"][:10], "%Y-%m-%d").date()
     is_stale = yesterday_date < expected
