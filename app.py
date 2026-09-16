@@ -808,14 +808,18 @@ def nifty_option_expiries(instruments, weekly_only=True):
     given month genuinely has only one expiry (e.g. right after a
     monthly-only listing window), in which case it's kept rather than
     returning nothing."""
+    today = ist_now().date()
     seen = {}
     for i in instruments:
         if i["exchange"] == "NFO" and i["instrument_type"] == "OPTIDX" and i["name"] == "NIFTY" and i["expiry"]:
             if i["expiry"] not in seen:
                 try:
-                    seen[i["expiry"]] = datetime.strptime(i["expiry"], "%d%b%Y").date()
+                    d = datetime.strptime(i["expiry"], "%d%b%Y").date()
                 except ValueError:
                     continue
+                if d < today:
+                    continue  # scrip master keeps expired contracts around; never quote a dead one
+                seen[i["expiry"]] = d
     pairs = sorted(seen.items(), key=lambda kv: kv[1])
     if not weekly_only or len(pairs) <= 1:
         return pairs
