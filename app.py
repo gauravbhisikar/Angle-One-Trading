@@ -240,19 +240,54 @@ def keyword_score_headline(headline):
     return sentiment, impact
 
 
-NEWS_LLM_MODEL = "deepseek/deepseek-v4-flash"  # a classification pass over
-                                                 # ~25 headlines is cheap,
-                                                 # low-stakes work — no need
-                                                 # for a pricier model here
+# Tried in order: two free models first (zero cost), only falling through
+# to the paid one if both are down/rate-limited (OpenRouter free tiers get
+# throttled under load) or return something unusable. deepseek-v4-flash is
+# already one of the cheapest paid models on OpenRouter, so it stays as the
+# final fallback rather than hunting for something cheaper still.
+OPENROUTER_MODEL_CHAIN = [
+    "deepseek/deepseek-chat-v3.1:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "deepseek/deepseek-v4-flash",
+]
+
+
+def openrouter_chat(prompt, temperature, timeout=30):
+    """Calls each model in OPENROUTER_MODEL_CHAIN in turn, returning the
+    first (content, model_name) that comes back with actual text. Raises
+    the last error if every model in the chain fails."""
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("no OPENROUTER_API_KEY configured")
+    last_exc = RuntimeError("empty model chain")
+    for model in OPENROUTER_MODEL_CHAIN:
+        try:
+            resp = http_post_json(
+                "https://openrouter.ai/api/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": temperature},
+                headers={"Authorization": f"Bearer {api_key}"}, timeout=timeout)
+            content = resp["choices"][0]["message"]["content"].strip()
+            if not content:
+                raise RuntimeError(f"{model}: empty response")
+            return content, model
+        except Exception as exc:
+            last_exc = RuntimeError(f"{model}: {exc}")
+            continue
+    raise last_exc
+
+
+def _strip_json_fences(content):
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+    return content
 
 
 def openrouter_classify_news(items):
     """One batched call classifying every headline at once (not one call
     per headline) — keeps this to a single cheap request per news refresh.
     Raises on any failure; caller falls back to keyword_score_headline."""
-    api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("no OPENROUTER_API_KEY configured")
     numbered = "\n".join(f"{i + 1}. {it['headline']}" for i, it in enumerate(items))
     prompt = (
         "You are a financial news classifier for India's NIFTY 50 index. "
@@ -279,15 +314,8 @@ def openrouter_classify_news(items):
         '[{"sentiment":"positive|negative|neutral","impact":"high|medium|low","reason":"<8 words>"}]\n\n'
         f"Headlines:\n{numbered}"
     )
-    resp = http_post_json(
-        "https://openrouter.ai/api/v1/chat/completions",
-        {"model": NEWS_LLM_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0},
-        headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
-    content = resp["choices"][0]["message"]["content"].strip()
-    if content.startswith("```"):
-        content = content.split("```")[1]
-        if content.startswith("json"):
-            content = content[4:]
+    content, _model = openrouter_chat(prompt, temperature=0)
+    content = _strip_json_fences(content)
     parsed = json.loads(content)
     if not isinstance(parsed, list) or len(parsed) != len(items):
         raise RuntimeError(f"classification shape mismatch (got {len(parsed) if isinstance(parsed, list) else type(parsed)})")
@@ -421,17 +449,11 @@ def openrouter_expected_trend(checks, news_sentiment):
         'actual price action, do not trade purely from pre-market bias>"\n'
         "}"
     )
-    resp = http_post_json(
-        "https://openrouter.ai/api/v1/chat/completions",
-        {"model": NEWS_LLM_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2},
-        headers={"Authorization": f"Bearer {api_key}"}, timeout=30)
-    content = resp["choices"][0]["message"]["content"].strip()
-    if content.startswith("```"):
-        content = content.split("```")[1]
-        if content.startswith("json"):
-            content = content[4:]
+    content, model = openrouter_chat(prompt, temperature=0.2)
+    content = _strip_json_fences(content)
     trend = json.loads(content)
     trend["method"] = "AI"
+    trend["model"] = model
     return trend
 
 
