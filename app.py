@@ -246,8 +246,8 @@ def keyword_score_headline(headline):
 # already one of the cheapest paid models on OpenRouter, so it stays as the
 # final fallback rather than hunting for something cheaper still.
 OPENROUTER_MODEL_CHAIN = [
-    "deepseek/deepseek-chat-v3.1:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen3.8-27b:free",
+    "google/gemma-4-31b-it:free",
     "deepseek/deepseek-v4-flash",
 ]
 
