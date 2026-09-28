@@ -467,8 +467,10 @@ def build_news_with_trend():
         market_checks = (CACHE.get("market") or {}).get("checks", [])
     try:
         snap["trend"] = openrouter_expected_trend(market_checks, snap["sentiment"])
-    except Exception:
+        snap["trend_error"] = None
+    except Exception as exc:
         snap["trend"] = None
+        snap["trend_error"] = str(exc)
     return snap
 
 
